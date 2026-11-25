@@ -21,6 +21,7 @@ import stats
 WAGERS_FILE = stats.DATA_DIR / "wagers.json"
 RESULTS = ("pending", "won", "lost", "push")
 MAX_AMOUNT = 1_000_000
+MAX_LEGS = 15
 
 
 def _money(value, name):
@@ -52,18 +53,44 @@ def clean(data):
         raise ValueError("Enter a valid date.")
     note = str(data.get("note") or "").strip()[:120]
     out = {"date": day.isoformat(), "note": note, "wagered": wagered, "result": result, "won": won}
-    # Optional link to a saved pick in My picks, with its odds (decimal), for reference.
+    out.update(_link(data))                    # optional link to a saved pick in My picks
+    # A parlay: one wager on several legs (each typed in or linked to a saved pick).
+    if data.get("legs") is not None:
+        legs = data["legs"]
+        if not isinstance(legs, list) or not 2 <= len(legs) <= MAX_LEGS:
+            raise ValueError(f"A parlay needs 2 to {MAX_LEGS} legs.")
+        out["legs"] = []
+        for i, leg in enumerate(legs, 1):
+            if not isinstance(leg, dict) or not str(leg.get("note") or "").strip():
+                raise ValueError(f"Parlay leg {i}: choose a pick or type what it is.")
+            out["legs"].append(dict({"note": str(leg["note"]).strip()[:120]}, **_link(leg)))
+        out.pop("pick_id", None)
+        out.pop("decimal", None)
+        if not out["note"]:
+            out["note"] = f"{len(legs)}-leg parlay"
+        odds = [leg.get("decimal") for leg in out["legs"]]
+        if all(odds):                             # combined odds, when every leg has them
+            combined = 1.0
+            for d in odds:
+                combined *= d
+            out["decimal"] = round(combined, 4)
+    return out
+
+
+def _link(data):
+    """An optional link to a saved pick (its id), with the pick's decimal odds."""
     pick_id = data.get("pick_id")
-    if pick_id:
-        if not isinstance(pick_id, str) or len(pick_id) > 40:
-            raise ValueError("That pick link isn't valid.")
-        out["pick_id"] = pick_id
-        try:
-            odds = float(data.get("decimal") or 0)
-        except (TypeError, ValueError):
-            odds = 0
-        if 1 < odds < 1000:
-            out["decimal"] = round(odds, 4)
+    if not pick_id:
+        return {}
+    if not isinstance(pick_id, str) or len(pick_id) > 40:
+        raise ValueError("That pick link isn't valid.")
+    out = {"pick_id": pick_id}
+    try:
+        odds = float(data.get("decimal") or 0)
+    except (TypeError, ValueError):
+        odds = 0
+    if 1 < odds < 1000:
+        out["decimal"] = round(odds, 4)
     return out
 
 
@@ -127,8 +154,8 @@ class WagerStore:
             old = next((x for x in self.wagers if x["id"] == wid), None)
             if not old:
                 raise KeyError("That wager wasn't found.")
-            old.pop("pick_id", None)          # the edit decides whether it's still linked
-            old.pop("decimal", None)
+            for key in ("pick_id", "decimal", "legs"):   # the edit decides links and legs
+                old.pop(key, None)
             old.update(w)
             self._write()
             return old

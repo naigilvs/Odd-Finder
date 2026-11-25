@@ -114,6 +114,26 @@
   function winFromOdds(wagered, decimal) {
     return Math.round(wagered * (decimal - 1) * 100) / 100;
   }
+  // ---- parlays
+  // Combined decimal odds: the legs' odds multiplied. Pushed legs drop out (as sportsbooks
+  // do); null if any other leg's odds aren't known. Three -110 legs: ~6.96, about +596.
+  function parlayDecimal(legs) {
+    let d = 1;
+    for (const leg of legs) {
+      if (leg.status === 'push') continue;
+      if (!(leg.decimal > 1)) return null;
+      d *= leg.decimal;
+    }
+    return Math.round(d * 10000) / 10000;
+  }
+  // The parlay's result from its legs' results: any loss loses it; it's decided only once
+  // every leg is won or pushed; all pushes return the stake.
+  function parlayResult(statuses) {
+    if (statuses.includes('lost')) return 'lost';
+    if (statuses.some(s => s !== 'won' && s !== 'push')) return null;
+    return statuses.every(s => s === 'push') ? 'push' : 'won';
+  }
+
   function wagerNet(w) {
     return w.result === 'won' ? w.won : w.result === 'lost' ? -w.wagered : 0;
   }
@@ -153,7 +173,7 @@
   }
 
   const api = { MARKET_WEIGHT, chance, agrees, confidence, CONF_RANK, betLabel, americanOdds, lineGroup, bestLines,
-                pickProfit, summarize, winFromOdds, wagerNet, wagerSummary };
+                pickProfit, summarize, winFromOdds, parlayDecimal, parlayResult, wagerNet, wagerSummary };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Calc = api;
 })(this);

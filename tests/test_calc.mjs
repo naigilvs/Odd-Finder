@@ -134,3 +134,15 @@ test('my wagers: extra stats', () => {
   assert.deepEqual(s.streak, { result: 'won', length: 2 });   // E and C (push D skipped)
   assert.equal(Calc.wagerSummary([]).streak, null);
 });
+
+test('parlays: combined odds and result', () => {
+  const leg = (decimal, status = 'pending') => ({ decimal, status });
+  assert.equal(Calc.parlayDecimal([leg(1.909), leg(1.909), leg(1.909)]), 6.9569);   // about +596
+  assert.equal(Calc.winFromOdds(10, Calc.parlayDecimal([leg(1.909), leg(1.909), leg(1.909)])), 59.57);
+  assert.equal(Calc.parlayDecimal([leg(1.909), leg(1.909, 'push'), leg(1.909)]), 3.6443);  // pushed leg drops out
+  assert.equal(Calc.parlayDecimal([leg(2.0), {}]), null);                             // a leg with no odds
+  assert.equal(Calc.parlayResult(['won', 'lost', 'pending']), 'lost');
+  assert.equal(Calc.parlayResult(['won', 'pending']), null);
+  assert.equal(Calc.parlayResult(['won', 'push']), 'won');
+  assert.equal(Calc.parlayResult(['push', 'push']), 'push');
+});

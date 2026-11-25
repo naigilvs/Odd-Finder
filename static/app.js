@@ -1252,6 +1252,13 @@ function makeRow(date) {
     <div class="wnote">
       <label>What you bet on <span class="muted">(optional)</span><select class="f-pick" aria-label="Choose a saved pick from My picks"></select></label>
       <input class="f-note" maxlength="120" placeholder="e.g. Lakers -3.5" autocomplete="off" aria-label="What you bet on">
+      <div class="f-legs" hidden></div>
+      <div class="f-parlay-tools">
+        <button type="button" class="linkbtn f-parlay-on">Make this a parlay</button>
+        <button type="button" class="linkbtn f-addleg" hidden>+ Add leg</button>
+        <span class="f-odds muted small"></span>
+        <button type="button" class="linkbtn f-parlay-off" hidden>Back to a single bet</button>
+      </div>
     </div>
     <label>Amount wagered ($)<input class="f-wagered" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
     <label>Result
@@ -1276,14 +1283,78 @@ function makeRow(date) {
 const f = (row, cls) => row.querySelector('.' + cls);
 const rowPick = row => row.dataset.pickId && PICKS.list.find(p => p.id === row.dataset.pickId);
 
-function fillPickOptions(row) {
+function pickOptions(emptyText) {
   const open = PICKS.list.filter(p => p.status === 'pending').sort((a, b) => a.start.localeCompare(b.start));
   const done = PICKS.list.filter(p => p.status !== 'pending').sort((a, b) => b.start.localeCompare(a.start)).slice(0, 50);
   const opt = p => `<option value="${esc(p.id)}">${esc(p.label || p.selection)} (${esc(p.event)}, ${new Date(p.start).toLocaleDateString([], { month: 'short', day: 'numeric' })}) ${esc(p.american)}</option>`;
-  f(row, 'f-pick').innerHTML = `<option value="">${PICKS.list.length ? 'Type your own below, or choose from My picks' : 'No saved picks yet: type your own below'}</option>` +
+  return `<option value="">${PICKS.list.length ? emptyText : 'No saved picks yet: type your own'}</option>` +
     (open.length ? `<optgroup label="Unsettled picks">${open.map(opt).join('')}</optgroup>` : '') +
     (done.length ? `<optgroup label="Settled picks">${done.map(opt).join('')}</optgroup>` : '');
+}
+
+function fillPickOptions(row) {
+  f(row, 'f-pick').innerHTML = pickOptions('Type your own below, or choose from My picks');
   f(row, 'f-pick').value = rowPick(row) ? row.dataset.pickId : '';
+  row.querySelectorAll('.leg').forEach(leg => {
+    leg.querySelector('.l-pick').innerHTML = pickOptions('Type this leg, or choose from My picks');
+    leg.querySelector('.l-pick').value = legPick(leg) ? leg.dataset.pickId : '';
+  });
+}
+
+// ---- parlays: one wager on several legs
+const isParlay = row => row.dataset.parlay === '1';
+const legPick = leg => leg.dataset.pickId && PICKS.list.find(p => p.id === leg.dataset.pickId);
+
+function makeLeg(row, data = {}) {
+  const leg = document.createElement('div');
+  leg.className = 'leg';
+  leg.innerHTML = `<span class="lnum"></span>
+    <select class="l-pick" aria-label="Choose this leg from My picks"></select>
+    <input class="l-note" maxlength="120" placeholder="e.g. Lakers -3.5" autocomplete="off" aria-label="Parlay leg">
+    <button type="button" class="linkbtn remove l-remove" aria-label="Remove this leg">Remove</button>`;
+  leg.dataset.pickId = data.pick_id || '';
+  leg.querySelector('.l-note').value = data.note || '';
+  f(row, 'f-legs').appendChild(leg);
+  leg.querySelector('.l-pick').innerHTML = pickOptions('Type this leg, or choose from My picks');
+  leg.querySelector('.l-pick').value = legPick(leg) ? leg.dataset.pickId : '';
+  numberLegs(row);
+  return leg;
+}
+
+function numberLegs(row) {
+  const legs = [...row.querySelectorAll('.leg')];
+  legs.forEach((leg, i) => {
+    leg.querySelector('.lnum').textContent = `Leg ${i + 1}`;
+    leg.querySelector('.l-remove').hidden = legs.length <= 2;           // a parlay has at least 2 legs
+  });
+}
+
+function setParlay(row, on, legs) {
+  row.dataset.parlay = on ? '1' : '';
+  f(row, 'f-legs').hidden = !on;
+  f(row, 'f-pick').hidden = on;
+  f(row, 'f-addleg').hidden = !on;
+  f(row, 'f-parlay-off').hidden = !on;
+  f(row, 'f-parlay-on').hidden = on;
+  f(row, 'f-odds').textContent = '';
+  f(row, 'f-note').placeholder = on ? 'Parlay name (optional), e.g. Sunday 3-leg' : 'e.g. Lakers -3.5';
+  f(row, 'f-legs').innerHTML = '';
+  if (on) {
+    const start = legs || (rowPick(row) ? [{ note: f(row, 'f-note').value, pick_id: row.dataset.pickId }, {}]
+                                        : [{ note: f(row, 'f-note').value }, {}]);
+    if (!legs) { f(row, 'f-note').value = ''; row.dataset.pickId = ''; f(row, 'f-pick').value = ''; }
+    start.forEach(l => makeLeg(row, l));
+  }
+  row.dataset.autoResult = '';
+  syncRow(row);
+}
+
+function rowLegs(row) {
+  return [...row.querySelectorAll('.leg')].map(leg => {
+    const p = legPick(leg);
+    return Object.assign({ note: leg.querySelector('.l-note').value.trim() },
+      p ? { pick_id: p.id, decimal: p.decimal, status: p.status } : {});
+  });
 }
 
 function choosePick(row, id) {
@@ -1301,14 +1372,32 @@ function choosePick(row, id) {
 
 // Show "Amount won" only for wins; for a linked pick, work it out from the odds unless you typed your own.
 function syncRow(row) {
+  let decimal = null, oddsText = null, from = "the pick's odds";
+  if (isParlay(row)) {
+    const legs = rowLegs(row);
+    decimal = Calc.parlayDecimal(legs);
+    f(row, 'f-odds').textContent = decimal ? `Combined odds ${Calc.americanOdds(decimal)} (${decimal.toFixed(2)})`
+      : 'Combined odds show when every leg is chosen from My picks';
+    oddsText = decimal ? Calc.americanOdds(decimal) : null;
+    from = 'the combined odds';
+    // every leg from My picks and graded? then the parlay's result follows from them
+    if (row.dataset.autoResult !== 'off') {
+      const r = legs.length >= 2 && legs.every(l => l.status) ? Calc.parlayResult(legs.map(l => l.status)) : null;
+      if (r) { f(row, 'f-result').value = r; row.dataset.autoResult = 'auto'; row.dataset.autoWon = '1'; }
+      else if (row.dataset.autoResult === 'auto') { f(row, 'f-result').value = 'pending'; row.dataset.autoResult = ''; }
+    }
+  } else {
+    const p = rowPick(row);
+    if (p && p.decimal > 1) { decimal = p.decimal; oddsText = p.american; }
+  }
   const won = f(row, 'f-result').value === 'won';
   f(row, 'f-wonwrap').hidden = !won;
-  const p = rowPick(row), wagered = +f(row, 'f-wagered').value, hint = f(row, 'f-hint');
-  if (won && p && p.decimal > 1 && wagered > 0 && (row.dataset.autoWon || !f(row, 'f-won').value)) {
-    f(row, 'f-won').value = Calc.winFromOdds(wagered, p.decimal);
+  const wagered = +f(row, 'f-wagered').value, hint = f(row, 'f-hint');
+  if (won && decimal > 1 && wagered > 0 && (row.dataset.autoWon || !f(row, 'f-won').value)) {
+    f(row, 'f-won').value = Calc.winFromOdds(wagered, decimal);
     row.dataset.autoWon = '1';
-    hint.textContent = `Worked out from the pick's odds (${p.american}). Change it if your payout was different.`;
-  } else if (!row.dataset.autoWon || !p) {
+    hint.textContent = `Worked out from ${from} (${oddsText}). Change it if your payout was different.`;
+  } else if (!row.dataset.autoWon || !decimal) {
     hint.textContent = 'Your profit, not counting the stake';
   }
 }
@@ -1316,12 +1405,21 @@ function syncRow(row) {
 function readRow(row) {
   const w = { date: f(row, 'f-date').value, note: f(row, 'f-note').value.trim(), wagered: +f(row, 'f-wagered').value,
               result: f(row, 'f-result').value, won: +f(row, 'f-won').value || 0 };
+  if (isParlay(row)) {
+    w.legs = rowLegs(row).map(({ note, pick_id, decimal }) => Object.assign({ note }, pick_id ? { pick_id, decimal } : {}));
+    return w;
+  }
   const p = rowPick(row);
   if (p) Object.assign(w, { pick_id: p.id, decimal: p.decimal });
   return w;
 }
 
 function rowProblem(w) {
+  if (w.legs) {
+    if (w.legs.length < 2) return 'a parlay needs at least 2 legs';
+    const blank = w.legs.findIndex(l => !l.note);
+    if (blank >= 0) return `parlay leg ${blank + 1}: choose a pick or type what it is`;
+  }
   if (!(w.wagered > 0)) return 'enter how much you wagered';
   if (w.result === 'won' && !(w.won > 0)) return 'enter how much you won (your profit, not counting the stake)';
   return null;
@@ -1354,8 +1452,10 @@ function startEdit(w) {
   row.dataset.pickId = w.pick_id || '';
   fillPickOptions(row);
   f(row, 'f-note').value = w.note || '';
+  if (w.legs) setParlay(row, true, w.legs);
   f(row, 'f-wagered').value = w.wagered;
   f(row, 'f-result').value = w.result;
+  row.dataset.autoResult = 'off';                     // keep the saved result while editing
   f(row, 'f-won').value = w.result === 'won' ? w.won : '';
   syncRow(row);
   refreshFormButtons();
@@ -1401,7 +1501,8 @@ function renderWagers() {
     const amount = w.result === 'pending' ? `<span class="muted">${dollars(w.wagered)} at stake</span>` : `<span class="${tone(n)}"><b>${signedDollars(n)}</b></span>`;
     return `
     <div class="pick ${w.result}${WAGERS.editing === w.id ? ' being-edited' : ''}">
-      <div class="pmain"><b>${esc(w.note || 'Wager')}</b>${w.pick_id ? ' <span class="tag-pick">From My picks</span>' : ''}
+      <div class="pmain"><b>${esc(w.note || 'Wager')}</b>${w.pick_id ? ' <span class="tag-pick">From My picks</span>' : ''}${w.legs ? ` <span class="tag-pick">${w.legs.length}-leg parlay${w.decimal ? ` ${Calc.americanOdds(w.decimal)}` : ''}</span>` : ''}
+        ${w.legs ? `<ol class="legs">${w.legs.map(l => `<li>${esc(l.note)}</li>`).join('')}</ol>` : ''}
         <span>${new Date(w.date + 'T12:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span></div>
       <div class="pres"><span class="badge ${w.result}">${RESULT_WORD[w.result]}</span>
         <span class="muted small">Wagered ${dollars(w.wagered)}${w.result === 'won' ? `, won ${dollars(w.won)}` : ''}</span></div>
@@ -1420,8 +1521,17 @@ function renderWagers() {
 $('#wRows').addEventListener('change', e => {
   const row = e.target.closest('.wrow');
   if (!row) return;
-  if (e.target.classList.contains('f-pick')) choosePick(row, e.target.value);
-  else syncRow(row);
+  if (e.target.classList.contains('f-pick')) return choosePick(row, e.target.value);
+  if (e.target.classList.contains('l-pick')) {
+    const leg = e.target.closest('.leg');
+    leg.dataset.pickId = e.target.value || '';
+    const p = legPick(leg);
+    if (p) leg.querySelector('.l-note').value = p.label || p.selection;
+    row.dataset.autoWon = '1';
+    return syncRow(row);
+  }
+  if (e.target.classList.contains('f-result')) row.dataset.autoResult = 'off';     // you chose it: keep it
+  syncRow(row);
 });
 $('#wRows').addEventListener('input', e => {
   const row = e.target.closest('.wrow');
@@ -1430,9 +1540,14 @@ $('#wRows').addEventListener('input', e => {
   syncRow(row);
 });
 $('#wRows').addEventListener('click', e => {
-  if (!e.target.classList.contains('f-remove')) return;
-  e.target.closest('.wrow').remove();
-  refreshFormButtons();
+  const row = e.target.closest('.wrow');
+  if (!row) return;
+  const c = e.target.classList;
+  if (c.contains('f-remove')) { row.remove(); refreshFormButtons(); }
+  else if (c.contains('f-parlay-on')) { setParlay(row, true); row.querySelector('.leg .l-pick').focus(); }
+  else if (c.contains('f-parlay-off')) setParlay(row, false);
+  else if (c.contains('f-addleg')) { makeLeg(row).querySelector('.l-pick').focus(); syncRow(row); }
+  else if (c.contains('l-remove')) { e.target.closest('.leg').remove(); numberLegs(row); syncRow(row); }
 });
 $('#wMore').addEventListener('click', () => {
   const rows = $('#wRows').querySelectorAll('.wrow');

@@ -102,6 +102,42 @@ class WagerLog(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.store.add_many(bad)
 
+    def test_parlay_one_wager_on_several_legs(self):
+        w = self.store.add({"date": "2026-11-22", "wagered": 10, "result": "pending", "legs": [
+            {"note": "Lakers -3.5", "pick_id": "a1", "decimal": 1.909},
+            {"note": "Over 220.5", "pick_id": "b2", "decimal": 1.909},
+            {"note": "Celtics ML", "pick_id": "c3", "decimal": 1.909}]})
+        self.assertEqual(w["note"], "3-leg parlay")                   # default name
+        self.assertAlmostEqual(w["decimal"], 1.909 ** 3, places=3)    # combined odds, about +596
+        self.assertNotIn("pick_id", w)
+        self.assertEqual([l["pick_id"] for l in w["legs"]], ["a1", "b2", "c3"])
+        # a typed-in leg has no odds, so there are no combined odds
+        w2 = self.store.add({"wagered": 5, "result": "lost", "note": "Sunday",
+                             "legs": [{"note": "Lakers -3.5", "pick_id": "a1", "decimal": 1.909}, {"note": "Typed leg"}]})
+        self.assertNotIn("decimal", w2)
+        self.assertEqual(w2["note"], "Sunday")
+        self.assertEqual(wagers.net(w2), -5)
+
+    def test_parlay_bad_legs_are_refused(self):
+        bad = [([{"note": "Only one"}], "2 to 15"),
+               ([{"note": f"L{i}"} for i in range(16)], "2 to 15"),
+               ("legs", "2 to 15"),
+               ([{"note": "A"}, {"note": "  "}], "leg 2"),
+               ([{"note": "A"}, "B"], "leg 2"),
+               ([{"note": "A"}, {"note": "B", "pick_id": 5}], "pick link")]
+        for legs, words in bad:
+            with self.assertRaises(ValueError) as e:
+                self.store.add({"wagered": 10, "result": "lost", "legs": legs})
+            self.assertIn(words, str(e.exception))
+
+    def test_editing_a_parlay_into_a_single_bet_drops_its_legs(self):
+        w = self.store.add({"wagered": 10, "result": "pending",
+                            "legs": [{"note": "A", "pick_id": "a1", "decimal": 2.0}, {"note": "B", "pick_id": "b2", "decimal": 2.0}]})
+        self.assertEqual(w["decimal"], 4.0)
+        single = self.store.update(w["id"], {"wagered": 10, "result": "lost", "note": "Just A"})
+        self.assertNotIn("legs", single)
+        self.assertNotIn("decimal", single)
+
 
 if __name__ == "__main__":
     unittest.main()
