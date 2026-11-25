@@ -58,14 +58,20 @@ Next to the market's win chance, each moneyline, spread and total in the NFL, NB
 
 Bets get a **Market + stats agree** badge when both opinions say the chance of winning is higher than FanDuel's price implies. The stats don't know about injuries or news, so treat them as a check on the market rather than a replacement. Player props, soccer and college sports aren't covered by the stats yet.
 
-### NBA player props
+### Player props (NBA, NHL, NFL)
 
-Player points, rebounds and assists in the NBA also get a stats opinion (`props_stats.py`):
+Player props also get a stats opinion where it has proven itself (`props_stats.py`):
 
-- **Expected stat** = the player's expected minutes × his per-minute rate (both from recent games, newer games counting more) × how much of that stat the opponent allows compared with an average team.
+- **Expected stat** = expected playing time (minutes in the NBA, ice time in the NHL, one game in the NFL) × the player's rate per unit of playing time (recent games weighted more) × how much of that stat the opponent allows compared with an average team.
 - **Chance of going over** comes from how far real results landed from the prediction in past games.
 - **Data:** each game's box score from ESPN's free game summaries, saved in `data/` and downloaded once.
-- **Honest gate:** tuned on last season, tested on this season at lines like the sportsbooks' (the player's recent average). A stat is only used if it beats both a coin flip and the player's recent hit rate. On this season it did for points (+2.7%), rebounds (+3.0%) and assists (+3.0%), but not 3-pointers, which stay on the market opinion. The test reruns every time the model updates, so a stat switches itself off if it stops passing.
+- **Honest gate:** tuned on last season, tested on this season at lines a sportsbook would offer (the player's recent average). A stat is only used if it beats both a coin flip and the player's recent hit rate. The test reruns every time the model updates. Current results:
+
+| League | Used | Not used |
+|---|---|---|
+| NBA | points (+2.7%), rebounds (+2.9%), assists (+2.7%) | 3-pointers |
+| NHL | points (+3.7%), shots on goal (+3.2%) | |
+| NFL | rushing yards (+3.1%), receiving yards (+2.3%), receptions (+2.5%) | passing yards |
 
 ## More bets
 
@@ -107,12 +113,12 @@ The **☰** button at the top left opens the menu: **Find bets** (main lines and
 Click the ☆ next to any bet, or **Save pick** in its details (you can add a stake). My picks has two tabs: **Unsettled** (waiting for a result) and **Settled** (won, lost or push).
 
 - **Automatic results:** moneylines, spreads, totals and team totals (including alternate lines) in the NFL, NBA, NHL and MLB are checked after the game from the same free ESPN scores the stats use. Opening the page or pressing **Check results** looks for new ones and uses no credits.
-- **NBA player props** (points, rebounds, assists, 3-pointers) are also checked automatically, from the player's real stats in the game's box score. If the player didn't play, the bet is marked a push (sportsbooks void it).
+- **NBA, NHL and NFL player props** (points, rebounds, assists, 3-pointers, shots on goal, yards, receptions) are also checked automatically, from the player's real stats in the box score. If an NBA or NHL player didn't play, the bet is a push (sportsbooks void it). NFL box scores only list players who recorded a stat, so if an NFL player isn't listed you mark that one yourself.
 - **Marking results yourself:** other player props, quarter/half/period bets and other sports get Won / Lost / Push buttons once the game has started. **Undo** puts a pick back to unsettled.
 - **Summary:** your record, how often your picks won compared with the bot's expected chance, the profit if you'd bet $100 on each, your real profit where you entered a stake, and a breakdown by confidence.
 
 ### Bot results
-Every moneyline, spread, total and team total the bot shows for the NFL, NBA, NHL and MLB, and every NBA points, rebounds, assists and 3-pointers prop, is logged automatically when you scan (once per bet; a rescan updates it to the latest price) and checked after the game. The page shows:
+Every moneyline, spread, total and team total the bot shows for the NFL, NBA, NHL and MLB, and every NBA, NHL and NFL player prop it can check, is logged automatically when you scan (once per bet; a rescan updates it to the latest price) and checked after the game. The page shows:
 
 - how often finished bets won compared with what the bot expected
 - the profit if you'd bet $100 on every **good-value** bet, on every **market + stats agree** bet, and on every bet for comparison

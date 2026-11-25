@@ -31,15 +31,18 @@ def base_market(market):
     return market[len("alternate_"):] if market.startswith("alternate_") else market
 
 
-# NBA player props are graded from the player's real stat in the game's box score.
-PROP_SPORT = "basketball_nba"
-PROP_MARKETS = {"player_points": "points", "player_rebounds": "rebounds",
-                "player_assists": "assists", "player_threes": "3-pointers"}
+# NBA, NHL and NFL player props are graded from the player's real stat in the box score.
+import props_stats
+
+
+def prop_label(sport, market):
+    cfg = props_stats.SPORTS.get(sport)
+    return cfg["labels"][cfg["markets"][market]] if cfg and market in cfg["markets"] else market
 
 
 def is_gradable_prop(pick):
-    return (pick.get("sport_key") == PROP_SPORT and pick.get("market") in PROP_MARKETS
-            and bool(pick.get("player")) and pick.get("outcome") in ("Over", "Under") and pick.get("point") is not None)
+    return (props_stats.handles(pick) and bool(pick.get("player"))
+            and pick.get("outcome") in ("Over", "Under") and pick.get("point") is not None)
 
 
 def auto_gradable(pick):
@@ -57,7 +60,6 @@ def grade_prop(pick, value):
 
 
 def _find_player_stat(*args, **kw):
-    import props_stats                         # imported when needed: it loads player stats
     return props_stats.find_player_stat(*args, **kw)
 
 
@@ -116,6 +118,8 @@ def _num(x):
 
 
 class PickStore:
+    drop_unknown = False          # a prop that can't be graded automatically: you mark it
+
     def __init__(self, path=PICKS_FILE):
         self.path = path
         self.lock = threading.Lock()
@@ -187,16 +191,24 @@ class PickStore:
             sport = p["sport_key"]
             fresh = refresh and sport not in refreshed
             refreshed.add(sport)
-            if p.get("player"):                       # NBA prop: the player's real stat
-                found = find_stat(p["market"], p["player"], p["home_team"], p["away_team"], p["start"], refresh=fresh)
+            if p.get("player"):                       # player prop: the player's real stat
+                found = find_stat(sport, p["market"], p["player"], p["home_team"], p["away_team"], p["start"], refresh=fresh)
                 if found is None:
                     continue
                 how, value = found
+                if how == "unknown":                  # can't tell from the box score
+                    with self.lock:
+                        if self.drop_unknown:
+                            self.picks.remove(p)
+                        else:
+                            p["auto"] = False         # you mark it
+                        graded += 1
+                    continue
                 if how == "did_not_play":
                     update = {"status": "push", "final": f"{p['player']} didn't play: bet void, stake returned"}
                 else:
                     update = {"status": grade_prop(p, value),
-                              "final": f"{p['player']}: {_num(value)} {PROP_MARKETS[p['market']]}"}
+                              "final": f"{p['player']}: {_num(value)} {prop_label(sport, p['market'])}"}
             else:
                 score = find(sport, p["home_team"], p["away_team"], p["start"], refresh=fresh)
                 if score is None:
@@ -227,6 +239,8 @@ def _key(b):
 class TrackStore(PickStore):
     """Every bet the bot showed that can be graded automatically, logged before the game
     and checked after it. Each bet is kept once (a rescan updates it to the latest price)."""
+
+    drop_unknown = True           # the track record leaves out bets it can't grade
 
     def __init__(self, path=TRACK_FILE):
         super().__init__(path)
@@ -318,7 +332,8 @@ def track_summary(bets, since=None):
         "by_league": group(lambda b: b.get("sport") or b["sport_key"]),
         "by_type": group(lambda b: base_market(b["market"]),
                          lambda k: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total", "team_totals": "Team total",
-                                    **{m: "Player " + n for m, n in PROP_MARKETS.items()}}.get(k, k)),
+                                    **{m: "Player " + cfg["labels"][st] for cfg in props_stats.SPORTS.values()
+                                       for m, st in cfg["markets"].items()}}.get(k, k)),
         "recent": [{k: b.get(k) for k in ("label", "selection", "event", "sport", "start", "american", "chance",
                                            "confidence", "ev", "status", "final", "market_label")} for b in recent],
     }

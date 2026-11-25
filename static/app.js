@@ -1019,12 +1019,16 @@ const TRACK_LEAGUES = ['americanfootball_nfl', 'basketball_nba', 'icehockey_nhl'
 const TRACK_MARKETS = ['h2h', 'spreads', 'totals', 'team_totals'];
 const TRACK = { sent: {}, timer: null };
 
-// NBA player props are checked against the player's real stats after the game.
-const TRACK_PROPS = ['player_points', 'player_rebounds', 'player_assists', 'player_threes'];
+// Player props are checked against the player's real stats after the game.
+const TRACK_PROPS = {
+  basketball_nba: ['player_points', 'player_rebounds', 'player_assists', 'player_threes'],
+  icehockey_nhl: ['player_points', 'player_shots_on_goal'],
+  americanfootball_nfl: ['player_pass_yds', 'player_rush_yds', 'player_reception_yds', 'player_receptions'],
+};
 
 function trackable(r) {
   if (new Date(r.start) <= Date.now()) return false;
-  if (r.player) return r.sport_key === 'basketball_nba' && TRACK_PROPS.includes(r.market)
+  if (r.player) return (TRACK_PROPS[r.sport_key] || []).includes(r.market)
     && (r.outcome === 'Over' || r.outcome === 'Under') && r.point != null;
   return TRACK_LEAGUES.includes(r.sport_key) && TRACK_MARKETS.includes(r.market.replace(/^alternate_/, ''));
 }

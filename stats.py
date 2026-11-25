@@ -518,7 +518,8 @@ def warm_up():
     for lg in _leagues.values():
         lg.refresh_if_stale()
     import props_stats
-    props_stats.LIVE.refresh_if_stale()
+    for live in props_stats.LIVE.values():
+        live.refresh_if_stale()
 
 
 _last_results_refresh = {}
@@ -574,8 +575,8 @@ def predict_many(items):
     import props_stats                            # here, not at the top: props_stats imports this file
     results, pending = {}, 0
     for it in items[:2000]:
-        if it.get("sport_key") == props_stats.SPORT and it.get("market") in props_stats.STATS:
-            res = props_stats.LIVE.predict(it)
+        if props_stats.handles(it):
+            res = props_stats.LIVE[it["sport_key"]].predict(it)
             if res == "pending":
                 pending += 1
             elif res:
@@ -601,7 +602,8 @@ def predict_many(items):
 
 def accuracy():
     import props_stats
-    out = [{"sport_key": "player_props", "league": "NBA player props", "props": props_stats.LIVE.accuracy()}]
+    out = [{"sport_key": f"props_{k}", "league": f"{props_stats.LEAGUE_NAMES[k]} player props", "props": live.accuracy()}
+           for k, live in props_stats.LIVE.items()]
     for key, lg in _leagues.items():
         lg.refresh_if_stale()
         out.append({"sport_key": key, "league": lg.cfg["name"], "status": lg.status,

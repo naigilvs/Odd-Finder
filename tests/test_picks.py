@@ -230,7 +230,7 @@ class PropGrading(unittest.TestCase):
         upcoming = self.store.save(prop(event_id="g3", start=FUTURE, selection="Later Over 9.5 points"))
         calls = []
 
-        def fake_stat(market, player, home, away, start, refresh=False):
+        def fake_stat(sport, market, player, home, away, start, refresh=False):
             calls.append((market, player))
             return ("played", 27.0) if player == "Devin Booker" else ("did_not_play", None)
 
@@ -251,10 +251,26 @@ class PropGrading(unittest.TestCase):
 
     def test_track_record_logs_nba_props(self):
         track = picks.TrackStore(Path(self.dir.name) / "track.json")
-        added, _ = track.log([prop(start=FUTURE), prop(start=FUTURE, sport_key="icehockey_nhl", event_id="n1")])
-        self.assertEqual(added, 1)
-        s = picks.track_summary([dict(track.all()[0], status="won")])
+        added, _ = track.log([prop(start=FUTURE), prop(start=FUTURE, sport_key="icehockey_nhl", event_id="n1"),
+                              prop(start=FUTURE, sport_key="baseball_mlb", market="batter_hits", event_id="m1")])
+        self.assertEqual(added, 2)                      # NBA and NHL props; MLB props aren't covered
+        s = picks.track_summary([dict(track.all()[0], status="won")])           # the NBA one
         self.assertEqual(s["by_type"][0]["name"], "Player points")
+
+    def test_nfl_player_missing_from_box_score_is_left_to_you(self):
+        nfl = dict(sport_key="americanfootball_nfl", market="player_receptions", player="Quiet Receiver",
+                   selection="Quiet Receiver Under 2.5 receptions", outcome="Under", point=2.5)
+        saved = self.store.save(prop(**nfl))
+        self.assertTrue(saved["auto"])
+        unknown = lambda *a, **k: ("unknown", None)
+        self.store.grade_pending(refresh=False, find=lambda *a, **k: None, find_stat=unknown)
+        p = self.store.all()[0]
+        self.assertEqual((p["status"], p["auto"]), ("pending", False))           # Won/Lost buttons for you
+        track = picks.TrackStore(Path(self.dir.name) / "track.json")
+        track.log([prop(start=FUTURE, **nfl)])
+        track.grade_pending(refresh=False, find=lambda *a, **k: None, find_stat=unknown,
+                            now=__import__("datetime").datetime.now(__import__("datetime").timezone.utc) + __import__("datetime").timedelta(days=3))
+        self.assertEqual(track.all(), [])                                         # left out of the record
 
 
 if __name__ == "__main__":
