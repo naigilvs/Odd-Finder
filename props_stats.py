@@ -364,3 +364,33 @@ class LiveProps:
 
 
 LIVE = LiveProps()
+
+
+def find_player_stat(market, player, home, away, start_iso, refresh=False):
+    """A player's real stat in a finished game, for grading props.
+    Returns ("played", value), ("did_not_play", None), or None if the game isn't over yet."""
+    stat = STATS.get(market)
+    if not stat:
+        return None
+    found = stats.find_final_game(SPORT, home, away, start_iso, refresh)
+    if not found:
+        return None
+    game = found[0]
+    with LIVE.lock:
+        box = LIVE.store.games.get(game["id"])
+    if box is None:                                   # not downloaded yet: fetch just this game
+        try:
+            players = fetch_box(game["id"])
+        except Exception:
+            return None
+        if not players:
+            return None
+        box = {"date": game["date"], "season": game["season"], "home": game["home"],
+               "away": game["away"], "players": players}
+        with LIVE.lock:
+            LIVE.store.games[game["id"]] = box
+    want = name_key(player)
+    for pl in box["players"]:
+        if name_key(pl["name"]) == want:
+            return ("played", pl[stat])
+    return ("did_not_play", None)

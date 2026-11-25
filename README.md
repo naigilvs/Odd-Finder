@@ -107,11 +107,12 @@ The **☰** button at the top left opens the menu: **Find bets** (main lines and
 Click the ☆ next to any bet, or **Save pick** in its details (you can add a stake). My picks has two tabs: **Unsettled** (waiting for a result) and **Settled** (won, lost or push).
 
 - **Automatic results:** moneylines, spreads, totals and team totals (including alternate lines) in the NFL, NBA, NHL and MLB are checked after the game from the same free ESPN scores the stats use. Opening the page or pressing **Check results** looks for new ones and uses no credits.
-- **Marking results yourself:** player props, quarter/half/period bets and other sports get Won / Lost / Push buttons once the game has started. **Undo** puts a pick back to unsettled.
+- **NBA player props** (points, rebounds, assists, 3-pointers) are also checked automatically, from the player's real stats in the game's box score. If the player didn't play, the bet is marked a push (sportsbooks void it).
+- **Marking results yourself:** other player props, quarter/half/period bets and other sports get Won / Lost / Push buttons once the game has started. **Undo** puts a pick back to unsettled.
 - **Summary:** your record, how often your picks won compared with the bot's expected chance, the profit if you'd bet $100 on each, your real profit where you entered a stake, and a breakdown by confidence.
 
 ### Bot results
-Every moneyline, spread, total and team total the bot shows for the NFL, NBA, NHL and MLB is logged automatically when you scan (once per bet; a rescan updates it to the latest price) and checked after the game. The page shows:
+Every moneyline, spread, total and team total the bot shows for the NFL, NBA, NHL and MLB, and every NBA points, rebounds, assists and 3-pointers prop, is logged automatically when you scan (once per bet; a rescan updates it to the latest price) and checked after the game. The page shows:
 
 - how often finished bets won compared with what the bot expected
 - the profit if you'd bet $100 on every **good-value** bet, on every **market + stats agree** bet, and on every bet for comparison

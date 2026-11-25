@@ -1019,9 +1019,14 @@ const TRACK_LEAGUES = ['americanfootball_nfl', 'basketball_nba', 'icehockey_nhl'
 const TRACK_MARKETS = ['h2h', 'spreads', 'totals', 'team_totals'];
 const TRACK = { sent: {}, timer: null };
 
+// NBA player props are checked against the player's real stats after the game.
+const TRACK_PROPS = ['player_points', 'player_rebounds', 'player_assists', 'player_threes'];
+
 function trackable(r) {
-  return TRACK_LEAGUES.includes(r.sport_key) && !r.player && new Date(r.start) > Date.now()
-    && TRACK_MARKETS.includes(r.market.replace(/^alternate_/, ''));
+  if (new Date(r.start) <= Date.now()) return false;
+  if (r.player) return r.sport_key === 'basketball_nba' && TRACK_PROPS.includes(r.market)
+    && (r.outcome === 'Over' || r.outcome === 'Under') && r.point != null;
+  return TRACK_LEAGUES.includes(r.sport_key) && TRACK_MARKETS.includes(r.market.replace(/^alternate_/, ''));
 }
 
 function scheduleTrackLog() {
@@ -1039,7 +1044,7 @@ async function logTrack() {
     bets.push({
       event_id: r.event_id, sport_key: r.sport_key, sport: r.sport, event: r.event, home_team: r.home_team,
       away_team: r.away_team, start: r.start, market: r.market, market_label: r.market_label, selection: r.selection,
-      label: betLabel(r), outcome: r.outcome, team_total_for: r.team_total_for, american: r.american, point: r.point,
+      label: betLabel(r), outcome: r.outcome, team_total_for: r.team_total_for, player: r.player, american: r.american, point: r.point,
       decimal: r.decimal, chance: c, fair_prob: r.fair_prob, stats_prob: s && s.prob != null ? s.prob : undefined,
       book_prob: r.book_prob, ev: r.ev, confidence: confidence(r).label, agree: agrees(r), book: state.book.name,
     });

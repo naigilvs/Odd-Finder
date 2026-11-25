@@ -1,4 +1,5 @@
 """Tests for saved picks and automatic grading (picks.py). No internet needed."""
+import json
 import sys
 import tempfile
 import unittest
@@ -138,9 +139,6 @@ class FinalScores(unittest.TestCase):
         self.assertIsNone(stats.find_final_score("soccer_epl", "A", "B", "2026-11-20T00:40:00Z"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TrackRecord(unittest.TestCase):
     def setUp(self):
@@ -197,3 +195,67 @@ class TrackRecord(unittest.TestCase):
         self.assertEqual([r["name"] for r in s["calibration"]], ["30–40%", "50–60%", "60–70%"])
         self.assertEqual(s["by_type"][0]["name"], "Moneyline")
         self.assertEqual(len(picks.track_summary(bets)["recent"]), 5)              # all time includes 2025
+
+
+def prop(**kw):
+    base = dict(market="player_points", market_label="Player points", player="Devin Booker",
+                selection="Devin Booker Over 20.5 points", outcome="Over", point=20.5)
+    base.update(kw)
+    return pick(**base)
+
+
+class PropGrading(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.store = picks.PickStore(Path(self.dir.name) / "picks.json")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_which_props_are_automatic(self):
+        self.assertTrue(picks.auto_gradable(prop()))
+        self.assertTrue(picks.auto_gradable(prop(market="player_threes")))
+        self.assertFalse(picks.auto_gradable(prop(sport_key="americanfootball_nfl")))   # NFL props: by hand
+        self.assertFalse(picks.auto_gradable(prop(market="player_double_double", outcome="Yes", point=None)))
+
+    def test_over_under_and_push(self):
+        self.assertEqual(picks.grade_prop(prop(), 27), "won")
+        self.assertEqual(picks.grade_prop(prop(), 18), "lost")
+        self.assertEqual(picks.grade_prop(prop(outcome="Under"), 18), "won")
+        self.assertEqual(picks.grade_prop(prop(point=20.0), 20), "push")
+
+    def test_graded_from_the_box_score(self):
+        played = self.store.save(prop())
+        sat = self.store.save(prop(event_id="g2", player="Bench Guy", selection="Bench Guy Over 5.5 points"))
+        upcoming = self.store.save(prop(event_id="g3", start=FUTURE, selection="Later Over 9.5 points"))
+        calls = []
+
+        def fake_stat(market, player, home, away, start, refresh=False):
+            calls.append((market, player))
+            return ("played", 27.0) if player == "Devin Booker" else ("did_not_play", None)
+
+        graded = self.store.grade_pending(refresh=False, find=lambda *a, **k: None, find_stat=fake_stat)
+        by_id = {p["id"]: p for p in self.store.all()}
+        self.assertEqual(graded, 2)
+        self.assertEqual((by_id[played["id"]]["status"], by_id[played["id"]]["final"]), ("won", "Devin Booker: 27 points"))
+        self.assertEqual(by_id[sat["id"]]["status"], "push")                       # void: stake returned
+        self.assertIn("didn't play", by_id[sat["id"]]["final"])
+        self.assertEqual(by_id[upcoming["id"]]["status"], "pending")
+        self.assertEqual(len(calls), 2)
+
+    def test_props_saved_before_become_automatic(self):
+        old = dict(prop(), id="old1", status="pending", auto=False, stake=None)
+        self.store.path.write_text(json.dumps([old]))
+        reloaded = picks.PickStore(self.store.path)
+        self.assertTrue(reloaded.all()[0]["auto"])
+
+    def test_track_record_logs_nba_props(self):
+        track = picks.TrackStore(Path(self.dir.name) / "track.json")
+        added, _ = track.log([prop(start=FUTURE), prop(start=FUTURE, sport_key="icehockey_nhl", event_id="n1")])
+        self.assertEqual(added, 1)
+        s = picks.track_summary([dict(track.all()[0], status="won")])
+        self.assertEqual(s["by_type"][0]["name"], "Player points")
+
+
+if __name__ == "__main__":
+    unittest.main()

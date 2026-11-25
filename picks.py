@@ -31,10 +31,34 @@ def base_market(market):
     return market[len("alternate_"):] if market.startswith("alternate_") else market
 
 
+# NBA player props are graded from the player's real stat in the game's box score.
+PROP_SPORT = "basketball_nba"
+PROP_MARKETS = {"player_points": "points", "player_rebounds": "rebounds",
+                "player_assists": "assists", "player_threes": "3-pointers"}
+
+
+def is_gradable_prop(pick):
+    return (pick.get("sport_key") == PROP_SPORT and pick.get("market") in PROP_MARKETS
+            and bool(pick.get("player")) and pick.get("outcome") in ("Over", "Under") and pick.get("point") is not None)
+
+
 def auto_gradable(pick):
+    if pick.get("player"):
+        return is_gradable_prop(pick)
     m = base_market(pick.get("market") or "")
     return (pick.get("sport_key") in stats.LEAGUES and m in AUTO_MARKETS
-            and not m.endswith(PERIOD_ENDINGS) and not pick.get("player"))
+            and not m.endswith(PERIOD_ENDINGS))
+
+
+def grade_prop(pick, value):
+    """Won, lost or push for an over/under prop, from the player's real stat."""
+    diff = value - pick["point"] if pick["outcome"] == "Over" else pick["point"] - value
+    return "won" if diff > 0 else "lost" if diff < 0 else "push"
+
+
+def _find_player_stat(*args, **kw):
+    import props_stats                         # imported when needed: it loads player stats
+    return props_stats.find_player_stat(*args, **kw)
 
 
 def grade(pick, home_score, away_score):
@@ -99,6 +123,9 @@ class PickStore:
             self.picks = json.loads(self.path.read_text())
         except (OSError, ValueError):
             self.picks = []
+        for p in self.picks:                  # picks saved before a bet type became automatic
+            if p.get("status") == "pending":
+                p["auto"] = auto_gradable(p)
 
     def _write(self):
         self.path.parent.mkdir(exist_ok=True)
@@ -148,26 +175,39 @@ class PickStore:
             if len(self.picks) != before:
                 self._write()
 
-    def grade_pending(self, refresh=True, find=stats.find_final_score, now=None):
+    def grade_pending(self, refresh=True, find=stats.find_final_score, find_stat=_find_player_stat, now=None):
         """Grade every finished, automatically gradable pick. Returns how many were graded."""
         now = now or datetime.now(timezone.utc)
         with self.lock:
-            todo = [p for p in self.picks if p["status"] == "pending" and p.get("auto")
+            todo = [p for p in self.picks if p["status"] == "pending" and auto_gradable(p)
                     and datetime.fromisoformat(p["start"].replace("Z", "+00:00")) + GRADE_AFTER < now]
         graded = 0
         refreshed = set()
         for p in todo:
             sport = p["sport_key"]
-            score = find(sport, p["home_team"], p["away_team"], p["start"], refresh=refresh and sport not in refreshed)
+            fresh = refresh and sport not in refreshed
             refreshed.add(sport)
-            if score is None:
-                continue
-            outcome = grade(p, *score)
-            if outcome is None:
-                continue
+            if p.get("player"):                       # NBA prop: the player's real stat
+                found = find_stat(p["market"], p["player"], p["home_team"], p["away_team"], p["start"], refresh=fresh)
+                if found is None:
+                    continue
+                how, value = found
+                if how == "did_not_play":
+                    update = {"status": "push", "final": f"{p['player']} didn't play: bet void, stake returned"}
+                else:
+                    update = {"status": grade_prop(p, value),
+                              "final": f"{p['player']}: {_num(value)} {PROP_MARKETS[p['market']]}"}
+            else:
+                score = find(sport, p["home_team"], p["away_team"], p["start"], refresh=fresh)
+                if score is None:
+                    continue
+                outcome = grade(p, *score)
+                if outcome is None:
+                    continue
+                update = {"status": outcome,
+                          "final": f"{p['away_team']} {_num(score[1])}, {p['home_team']} {_num(score[0])}"}
             with self.lock:
-                p.update({"status": outcome, "graded_by": "auto", "graded_at": now.isoformat(),
-                          "final": f"{p['away_team']} {_num(score[1])}, {p['home_team']} {_num(score[0])}"})
+                p.update(update, graded_by="auto", graded_at=now.isoformat())
                 graded += 1
         if graded:
             with self.lock:
@@ -277,7 +317,8 @@ def track_summary(bets, since=None):
         "by_confidence": [r for lvl in ("High", "Medium", "Low") for r in group(lambda b: b.get("confidence") or "–") if r["name"] == lvl],
         "by_league": group(lambda b: b.get("sport") or b["sport_key"]),
         "by_type": group(lambda b: base_market(b["market"]),
-                         lambda k: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total", "team_totals": "Team total"}.get(k, k)),
+                         lambda k: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total", "team_totals": "Team total",
+                                    **{m: "Player " + n for m, n in PROP_MARKETS.items()}}.get(k, k)),
         "recent": [{k: b.get(k) for k in ("label", "selection", "event", "sport", "start", "american", "chance",
                                            "confidence", "ev", "status", "final", "market_label")} for b in recent],
     }
