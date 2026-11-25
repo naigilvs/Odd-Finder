@@ -57,3 +57,13 @@ Next to the market's win chance, each moneyline, spread and total in the NFL, NB
 - **Tuning and testing:** settings are tuned on last season and tested on this season, so the accuracy check is honest. See **How accurate are the stats?** on the page. A league or bet type that tests poorly isn't given a stats number.
 
 Bets get a **Market + stats agree** badge when both opinions say the chance of winning is higher than FanDuel's price implies. The stats don't know about injuries or news, so treat them as a check on the market rather than a replacement. Player props, soccer and college sports aren't covered by the stats yet.
+
+## More bets
+
+The **More bets** switch at the top opens a separate section for alternate lines, team totals, halves/quarters/periods, over/under player props and yes/no props (anytime touchdown, double-double, home run…). Nothing there uses credits until you ask:
+
+1. Pick a league. Its list of upcoming games loads for free.
+2. Tick the games (up to 10) and the bet types you want. The Scan button shows the most credits it can use: about 1 per bet type per game.
+3. Filter the results by league, game, player or team, bet type and confidence. Click any bet for the full explanation.
+
+Results are saved in your browser until the games start. Alternate lines and team totals also get a stats opinion. Yes/no props where books only offer "Yes" can't have their margin removed exactly, so the bot estimates it (about 10%) and marks them Low confidence.

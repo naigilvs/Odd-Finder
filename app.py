@@ -16,6 +16,8 @@ Run:  python3 app.py            (needs an API key, see README.md)
 """
 import argparse
 import json
+import math
+import re
 import os
 import random
 import threading
@@ -64,9 +66,80 @@ MARKET_LABELS = {
     "player_reception_yds": "Receiving yards", "player_receptions": "Receptions",
     "batter_hits": "Batter hits", "batter_total_bases": "Total bases",
     "pitcher_strikeouts": "Pitcher strikeouts", "player_shots_on_goal": "Shots on goal",
+    "player_anytime_td": "Anytime touchdown", "player_double_double": "Double-double",
+    "player_triple_double": "Triple-double", "player_goal_scorer_anytime": "Anytime goal",
+    "batter_home_runs": "Home runs",
 }
 PROP_EVENTS_PER_SPORT = 8      # caps API usage when props are turned on
+
+# ---- "More bets": loaded one game at a time (about 1 credit per bet type per game)
+MORE_MAX_GAMES = 10
+PERIOD_MARKETS = {   # by sport family (first part of the sport key)
+    "basketball": ["h2h_h1", "spreads_h1", "totals_h1", "h2h_q1", "spreads_q1", "totals_q1"],
+    "americanfootball": ["h2h_h1", "spreads_h1", "totals_h1", "h2h_q1", "spreads_q1", "totals_q1"],
+    "icehockey": ["h2h_p1", "spreads_p1", "totals_p1"],
+    "baseball": ["h2h_1st_5_innings", "spreads_1st_5_innings", "totals_1st_5_innings"],
+}
+YES_NO_MARKETS = {
+    "americanfootball_nfl": ["player_anytime_td"], "americanfootball_ncaaf": ["player_anytime_td"],
+    "basketball_nba": ["player_double_double", "player_triple_double"],
+    "icehockey_nhl": ["player_goal_scorer_anytime"], "baseball_mlb": ["batter_home_runs"],
+}
+# When books only offer the "Yes" side, the margin can't be removed exactly, so
+# assume this much margin instead (and mark the bet as low confidence).
+ONE_SIDED_MARGIN = 0.10
+
+
+def more_groups(sport):
+    """Bet-type groups the More bets section can load for a league."""
+    family = sport.split("_")[0]
+    groups = [
+        {"key": "alt", "label": "Alternate lines", "hint": "Spreads and totals at other numbers",
+         "markets": ["alternate_spreads", "alternate_totals"]},
+        {"key": "team", "label": "Team totals", "hint": "One team's score over or under",
+         "markets": ["team_totals", "alternate_team_totals"]},
+        {"key": "periods", "label": "Halves, quarters and periods", "hint": "Moneyline, spread and total for part of the game",
+         "markets": PERIOD_MARKETS.get(family, [])},
+        {"key": "props", "label": "Player props (over/under)", "hint": "Points, yards, strikeouts and more",
+         "markets": PROP_MARKETS.get(sport, [])},
+        {"key": "yesno", "label": "Yes/no player props", "hint": "Anytime touchdown, double-double, home run…",
+         "markets": YES_NO_MARKETS.get(sport, [])},
+    ]
+    return [g for g in groups if g["markets"]]
+
+
+PERIOD_NAMES = {"_q1": "1st quarter", "_q2": "2nd quarter", "_q3": "3rd quarter", "_q4": "4th quarter",
+                "_h1": "1st half", "_h2": "2nd half", "_p1": "1st period", "_p2": "2nd period",
+                "_p3": "3rd period", "_1st_5_innings": "1st 5 innings", "_1st_1_innings": "1st inning"}
+
+
+def split_market(key):
+    """'alternate_spreads' -> ('spreads', True, None); 'totals_h1' -> ('totals', False, '1st half')."""
+    alt = key.startswith("alternate_")
+    base = key[len("alternate_"):] if alt else key
+    for suffix, name in PERIOD_NAMES.items():
+        if base.endswith(suffix):
+            return base[:-len(suffix)], alt, name
+    return base, alt, None
+
+
+def market_label(key):
+    if key in MARKET_LABELS:
+        return MARKET_LABELS[key]
+    base, alt, period = split_market(key)
+    names = {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total", "team_totals": "Team total"}
+    label = names.get(base) or MARKET_LABELS.get(base) or base.split("_", 1)[-1].replace("_", " ").capitalize()
+    if alt:
+        label = "Alt " + label.lower()
+    if period:
+        label = f"{period[0].upper()}{period[1:]} {label.lower()}"
+    return label
+
+
+def is_player_market(key):
+    return key.startswith(("player_", "batter_", "pitcher_"))
 CACHE_SECONDS = 300
+SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")   # league keys and game ids from the browser
 
 # Team logos and player photos come from TheSportsDB's free API (key "123").
 # The free plan allows ~30 requests a minute, so names are looked up one at a
@@ -163,6 +236,65 @@ def fetch_events(sport, target, include_props):
                 continue
             merge_bookmakers(by_id[ev["id"]], extra.get("bookmakers", []))
     return events
+
+
+def books_param(target):
+    return ",".join([target] + [b for b in REFERENCE_BOOKS if b != target][:9])
+
+
+def list_games(sport):
+    """Upcoming games in one league. Free: The Odds API's events list costs no credits."""
+    now = datetime.now(timezone.utc)
+    events = demo_events(sport, "fanduel", False) if DEMO else api_get(f"/sports/{sport}/events")
+    return [{"id": e["id"], "home": e.get("home_team"), "away": e.get("away_team"), "start": e["commence_time"]}
+            for e in events if parse_time(e["commence_time"]) > now]
+
+
+def run_more_scan(target, sport, event_ids, markets):
+    """More bets: load the chosen bet types for the chosen games, one game at a time."""
+    now = datetime.now(timezone.utc)
+    rows, errors = [], []
+
+    def fetch(eid, mkts):
+        return api_get(f"/sports/{sport}/events/{eid}/odds", bookmakers=books_param(target),
+                       markets=",".join(mkts), oddsFormat="decimal")
+
+    def one(eid):
+        if DEMO:
+            try:
+                return demo_more_event(sport, eid, markets), None
+            except ApiError as e:
+                return None, str(e)
+        try:
+            return fetch(eid, markets), None
+        except ApiError as e:
+            if "HTTP 422" not in str(e) or len(markets) == 1:
+                return None, str(e)
+        # A bet type this league doesn't support can reject the whole request (no credits
+        # are charged for that), so try each bet type on its own and keep what works.
+        event, skipped = None, []
+        for m in markets:
+            try:
+                part = fetch(eid, [m])
+            except ApiError:
+                skipped.append(market_label(m))
+                continue
+            if event is None:
+                event = part
+            else:
+                merge_bookmakers(event, part.get("bookmakers", []))
+        note = f"Not offered for this game: {', '.join(skipped)}" if skipped else None
+        return event, (note if event is None else None)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for ev, err in pool.map(one, event_ids):
+            if err:
+                errors.append(err)
+            elif ev and ev.get("bookmakers") and parse_time(ev["commence_time"]) > now:
+                rows.extend(analyze_event(ev, target, 1))
+    rows.sort(key=lambda r: r["ev"], reverse=True)
+    return {"book": TARGET_BOOKS[target], "demo": DEMO, "generated": now.isoformat(),
+            "count": len(rows), "rows": rows, "errors": errors, "quota": _quota}
 
 
 def merge_bookmakers(event, extra_books):
@@ -300,14 +432,27 @@ def american(decimal):
 
 
 def describe(market, outcome):
+    """Full name of the bet, e.g. 'Lakers -3.5', 'J. Smith Over 24.5 points', 'Lakers Over 112.5, 1st half'."""
     name, point, desc = outcome["name"], outcome.get("point"), outcome.get("description")
-    if desc:  # player prop
-        return f"{desc} {name} {point:g}" if point is not None else f"{desc} {name}"
-    if market == "spreads":
-        return f"{name} {point:+g}"
-    if market == "totals":
-        return f"{name} {point:g}"
-    return name
+    base, alt, period = split_market(market)
+    if base == "team_totals":
+        text = f"{desc} {name} {point:g}" if point is not None else f"{desc} {name}"
+    elif desc:  # player prop
+        stat = market_label(market)
+        stat = stat.split(" ", 1)[1] if stat.startswith(("Player ", "Batter ", "Pitcher ")) else stat
+        if point is None:
+            text = f"{desc} {stat.lower()}: {name}"
+        elif is_player_market(market) and market in YES_NO_MARKETS.get("baseball_mlb", []) and point == 0.5:
+            text = f"{desc} {stat.lower()}: {'Yes' if name == 'Over' else 'No'}"
+        else:
+            text = f"{desc} {name} {point:g} {stat.lower()}"
+    elif base == "spreads" and point is not None:
+        text = f"{name} {point:+g}"
+    elif base == "totals" and point is not None:
+        text = f"{name} {point:g}"
+    else:
+        text = name
+    return f"{text}, {period}" if period else text
 
 
 def analyze_event(event, target, min_books):
@@ -319,18 +464,30 @@ def analyze_event(event, target, min_books):
               for b in event["bookmakers"] if b["key"] != target]
     rows = []
     for key, outs in book_lines(tbook, home).items():
-        if len(outs) < 2:
-            continue
         names = set(outs)
+        one_sided = len(outs) == 1          # e.g. anytime touchdown: only "Yes" is offered
         weighted = {n: 0.0 for n in names}
-        total_w, used = 0.0, []
+        total_w, used, estimated = 0.0, [], False
         compare = {n: [] for n in names}    # each other book's price for each side
         for bkey, btitle, blines in others:
             line = blines.get(key)
-            if not line or set(line) != names:
+            if not line:
+                continue
+            if one_sided:
+                (n,) = names
+                if n not in line:
+                    continue
+                if len(line) >= 2:
+                    probs = {n: devig(line)[n]}
+                else:                       # margin can't be removed exactly: estimate it
+                    probs = {n: (1.0 / line[n]["price"]) / (1 + ONE_SIDED_MARGIN)}
+                    estimated = True
+            elif set(line) == names:
+                probs = devig(line)
+            else:
                 continue
             w = SHARP_WEIGHTS.get(bkey, 1.0)
-            for n, p in devig(line).items():
+            for n, p in probs.items():
                 weighted[n] += w * p
                 compare[n].append({"book": btitle, "price": line[n]["price"],
                                    "american": american(line[n]["price"]), "sharp": bkey in SHARP_WEIGHTS})
@@ -338,11 +495,14 @@ def analyze_event(event, target, min_books):
             used.append(btitle)
         if len(used) < min_books:
             continue
-        hold = sum(1.0 / o["price"] for o in outs.values()) - 1
+        hold = None if one_sided else sum(1.0 / o["price"] for o in outs.values()) - 1
         market = key[0]
+        base = split_market(market)[0]
+        teams = (home, event.get("away_team"))
         for n, o in outs.items():
             fair = weighted[n] / total_w
             price = o["price"]
+            desc = o.get("description")
             rows.append({
                 "event_id": event["id"],
                 "sport_key": event.get("sport_key"),
@@ -350,21 +510,24 @@ def analyze_event(event, target, min_books):
                 "event": f"{event.get('away_team')} @ {home}" if home else event.get("sport_title"),
                 "home_team": home,
                 "away_team": event.get("away_team"),
-                "pick_team": n if n in (home, event.get("away_team")) else None,
-                "player": o.get("description"),
+                "pick_team": n if n in teams else (desc if base == "team_totals" else None),
+                "player": desc if desc and is_player_market(market) else None,
+                "team_total_for": desc if base == "team_totals" else None,
                 "outcome": n,
                 "point": o.get("point"),
                 "start": event["commence_time"],
                 "market": market,
-                "market_label": MARKET_LABELS.get(market, market.replace("_", " ").title()),
+                "market_label": market_label(market),
                 "selection": describe(market, o),
+                "labeled": True,             # selection already names the stat/period
+                "estimated": estimated,
                 "decimal": price,
                 "american": american(price),
                 "book_prob": round(1.0 / price, 4),
                 "fair_prob": round(fair, 4),
                 "edge": round(fair - 1.0 / price, 4),
                 "ev": round(fair * price - 1, 4),
-                "hold": round(hold, 4),
+                "hold": round(hold, 4) if hold is not None else None,
                 "books_used": used,
                 "compare": sorted(compare[n], key=lambda c: -c["price"]),
                 "sharp": any(b in ("Pinnacle", "Betfair") for b in used),
@@ -461,10 +624,79 @@ def demo_events(sport, target, include_props):
                         {"name": "Under", "description": player, "point": pt, "price": price(0.5)}]})
             books.append({"key": key, "title": title, "markets": markets})
         events.append({"id": f"{sport}-{i}", "sport_key": sport,
-                       "sport_title": dict((k, t) for k, t, _ in DEMO_SPORTS)[sport],
+                       "sport_title": dict((k, t) for k, t, _ in DEMO_SPORTS).get(sport, sport),
                        "commence_time": start, "home_team": home, "away_team": away,
                        "bookmakers": books})
     return events
+
+
+def demo_more_event(sport, eid, markets):
+    """Made-up odds for the More bets section: every chosen bet type for one demo game."""
+    ev = next((e for e in demo_events(sport, "fanduel", False) if e["id"] == eid), None)
+    if not ev:
+        raise ApiError("That game isn't available any more.")
+    rng = random.Random(eid + "|" + ",".join(sorted(markets)))
+    home, away = ev["home_team"], ev["away_team"]
+    fd = {m["key"]: m for m in ev["bookmakers"][0]["markets"]}
+    h2h = {o["name"]: o["price"] for o in fd["h2h"]["outcomes"]}
+    p_home = (1 / h2h[home]) / sum(1 / p for p in h2h.values())
+    spread = abs(fd["spreads"]["outcomes"][0]["point"])
+    total = fd["totals"]["outcomes"][0]["point"]
+    players = rng.sample(DEMO_PLAYERS, 3)
+    half = lambda x: math.floor(x) + 0.5          # always a half point: no pushes
+
+    # Each line's outcomes with their "true" chance; prices per book are made from these below.
+    spec = []
+    for m in markets:
+        base, alt, period = split_market(m)
+        scale = {None: 1, "1st half": 0.5, "1st quarter": 0.25, "1st period": 0.33, "1st 5 innings": 0.55}.get(period, 0.5)
+        if base == "h2h":
+            spec.append((m, [{"name": home, "p": p_home}, {"name": away, "p": 1 - p_home}]))
+        elif base == "spreads":
+            for pt in ([spread - 4, spread + 3, spread + 7] if alt else [spread * scale]):
+                pt = half(max(pt, 0.5))
+                p = min(max(0.5 + (spread * scale - pt) * 0.035, 0.05), 0.95)
+                spec.append((m, [{"name": home, "point": -pt, "p": p}, {"name": away, "point": pt, "p": 1 - p}]))
+        elif base == "totals":
+            for pt in ([total * scale - total * 0.06, total * scale + total * 0.06] if alt else [total * scale]):
+                pt = half(pt)
+                p = min(max(0.5 + (total * scale - pt) / (total * 0.25), 0.05), 0.95)
+                spec.append((m, [{"name": "Over", "point": pt, "p": p}, {"name": "Under", "point": pt, "p": 1 - p}]))
+        elif base == "team_totals":
+            for team, share in ((home, p_home), (away, 1 - p_home)):
+                exp = total * (0.45 + share * 0.1)
+                for pt in ([exp - total * 0.05, exp + total * 0.05] if alt else [exp]):
+                    pt = half(pt)
+                    p = min(max(0.5 + (exp - pt) / (total * 0.2), 0.05), 0.95)
+                    spec.append((m, [{"name": "Over", "point": pt, "description": team, "p": p},
+                                     {"name": "Under", "point": pt, "description": team, "p": 1 - p}]))
+        elif m == "batter_home_runs":
+            for pl in players:
+                p = rng.uniform(0.08, 0.3)
+                spec.append((m, [{"name": "Over", "point": 0.5, "description": pl, "p": p},
+                                 {"name": "Under", "point": 0.5, "description": pl, "p": 1 - p}]))
+        elif any(m in v for v in YES_NO_MARKETS.values()):
+            for pl in players:   # yes-only market, like real anytime-touchdown odds
+                spec.append((m, [{"name": "Yes", "description": pl, "p": rng.uniform(0.12, 0.55)}]))
+        elif is_player_market(m):
+            for pl in players[:2]:
+                pt = half(rng.uniform(3, 28))
+                spec.append((m, [{"name": "Over", "point": pt, "description": pl, "p": 0.5},
+                                 {"name": "Under", "point": pt, "description": pl, "p": 0.5}]))
+
+    books = []
+    for key, title in DEMO_BOOKS:
+        margin = 0.025 if key == "pinnacle" else 0.05
+        by_market = {}
+        for m, outs in spec:
+            for o in outs:
+                p = min(max(o["p"] + rng.uniform(-0.035, 0.035), 0.03), 0.97)
+                out = {k: v for k, v in o.items() if k != "p"}
+                out["price"] = round(1 / (p * (1 + margin)), 2)
+                by_market.setdefault(m, []).append(out)
+        books.append({"key": key, "title": title,
+                      "markets": [{"key": m, "outcomes": outs} for m, outs in by_market.items()]})
+    return dict(ev, bookmakers=books)
 
 
 def demo_stats(items):
@@ -472,7 +704,8 @@ def demo_stats(items):
     out = {}
     for it in items:
         key = it.get("key", "")
-        if it.get("market") not in ("h2h", "spreads", "totals") or it.get("outcome") == "Draw":
+        market = (it.get("market") or "").replace("alternate_", "", 1)
+        if market not in ("h2h", "spreads", "totals", "team_totals") or it.get("outcome") == "Draw":
             out[key] = {"reason": "Stats don't cover this bet type yet"}
             continue
         rng = random.Random(key)
@@ -558,6 +791,24 @@ class Handler(BaseHTTPRequestHandler):
                 props = q.get("props", ["0"])[0] == "1"
                 min_books = max(1, int(q.get("min_books", ["2"])[0]))
                 self.send_json(run_scan(target, sports, props, min_books))
+            elif url.path == "/api/games":
+                sport = q.get("sport", [""])[0]
+                if not SAFE_ID.match(sport):
+                    return self.send_json({"error": "Pick a league."}, 400)
+                self.send_json({"games": list_games(sport), "groups": more_groups(sport), "quota": _quota})
+            elif url.path == "/api/more-scan":
+                target = q.get("book", ["fanduel"])[0]
+                sport = q.get("sport", [""])[0]
+                if target not in TARGET_BOOKS or not SAFE_ID.match(sport):
+                    return self.send_json({"error": "Pick a sportsbook and a league."}, 400)
+                events = [e for e in q.get("events", [""])[0].split(",") if SAFE_ID.match(e)]
+                allowed = {m for g in more_groups(sport) for m in g["markets"]}
+                markets = [m for m in q.get("markets", [""])[0].split(",") if m in allowed]
+                if not events or not markets:
+                    return self.send_json({"error": "Pick at least one game and one bet type."}, 400)
+                if len(events) > MORE_MAX_GAMES:
+                    return self.send_json({"error": f"Pick at most {MORE_MAX_GAMES} games at a time."}, 400)
+                self.send_json(run_more_scan(target, sport, events, markets))
             else:
                 self.send_json({"error": "Not found"}, 404)
         except ApiError as e:

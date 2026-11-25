@@ -249,6 +249,30 @@
   @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   .toppick.fresh { animation: rise .35s ease-out; }
 
+  /* ---------- main / more switch ---------- */
+  .viewswitch { display: flex; gap: 10px; padding-top: 22px; flex-wrap: wrap; }
+  .viewswitch button {
+    flex: 1 1 220px; text-align: left; cursor: pointer; border-radius: 10px; padding: 10px 16px;
+    background: var(--panel); border: 1px solid var(--line); color: var(--slate); font: 600 21px var(--display);
+  }
+  .viewswitch button small { display: block; font: 400 13px var(--body); }
+  .viewswitch button[aria-selected="true"] { color: var(--chalk); border-color: var(--amber); box-shadow: inset 0 -3px 0 var(--amber); }
+
+  /* ---------- more bets ---------- */
+  .more-intro { color: var(--slate); margin: 20px 0 8px; max-width: 75ch; }
+  .more-steps { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) minmax(240px, 1.6fr); gap: 18px; margin-top: 10px; }
+  .step { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .step h3 { font: 600 19px var(--display); margin: 0 0 10px; display: flex; justify-content: space-between; align-items: baseline; }
+  .step select { width: 100%; background: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; color: var(--chalk); }
+  .mgames { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+  .mgames label, .mtypes label { display: flex; gap: 10px; align-items: flex-start; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 15px; }
+  .mgames label:hover, .mtypes label:hover { background: var(--panel-2); }
+  .mgames input, .mtypes input { margin-top: 3px; accent-color: var(--amber); width: 16px; height: 16px; flex: none; }
+  .mgames small, .mtypes small { display: block; color: var(--slate); font-size: 13px; }
+  .mtypes .cost { color: var(--amber); }
+  .more-scan { display: flex; justify-content: flex-end; padding: 16px 0 4px; }
+  @media (max-width: 860px) { .more-steps { grid-template-columns: 1fr; } }
+
   /* ---------- clickable bets + details pop-up ---------- */
   .bet, .toppick { cursor: pointer; }
   .bet:hover { background: rgba(255,255,255,.035); }
@@ -322,6 +346,12 @@
   <div class="demo-bar" id="demoBar" hidden><div class="wrap">Demo mode: these teams and odds are made up. Add your API key to config.json to see real lines.</div></div>
 
   <main class="wrap">
+    <div class="viewswitch" role="tablist" aria-label="Which bets">
+      <button role="tab" data-view="main" aria-selected="true">Main lines<small>Moneyline, spread, total</small></button>
+      <button role="tab" data-view="more" aria-selected="false">More bets<small>Alt lines, team totals, halves, props</small></button>
+    </div>
+
+    <div id="mainView">
     <nav class="tabs" id="tabs" role="tablist" aria-label="Sports"></nav>
 
     <div class="scanbar">
@@ -365,6 +395,59 @@
       <div class="list" id="list"></div>
       <div class="empty" id="empty"></div>
     </section>
+    </div>
+
+    <!-- More bets: loaded one game at a time, only when asked, to save credits -->
+    <div id="moreView" hidden>
+      <p class="more-intro">These bets are loaded one game at a time and cost about 1 credit per bet type per game, so only the games and bet types you pick are loaded.</p>
+      <div class="more-steps">
+        <div class="step">
+          <h3>1. League</h3>
+          <select id="mLeague" aria-label="League"></select>
+        </div>
+        <div class="step">
+          <h3>2. Games <button class="linkbtn" id="mAllGames">select all</button></h3>
+          <div id="mGames" class="mgames"></div>
+        </div>
+        <div class="step">
+          <h3>3. Bet types</h3>
+          <div id="mTypes" class="mtypes"></div>
+        </div>
+      </div>
+      <div class="more-scan">
+        <div class="scan-col">
+          <button class="btn-scan" id="mScan" disabled>Pick games</button>
+          <div class="credit-line" id="mCredits"></div>
+        </div>
+      </div>
+      <div class="status" id="mStatus" role="status"></div>
+
+      <div class="filters" id="mFilters" hidden>
+        <label>League<select id="mfLeague"></select></label>
+        <label>Game<select id="mfGame"></select></label>
+        <label>Player or team<input id="mfWho" list="mWhoList" placeholder="Type a name" autocomplete="off"></label>
+        <datalist id="mWhoList"></datalist>
+        <label>Bet type<select id="mfType"></select></label>
+        <label>Confidence
+          <select id="mfConf">
+            <option value="">Any</option>
+            <option value="medium">Medium or high</option>
+            <option value="high">High only</option>
+          </select>
+        </label>
+        <label>Sort by
+          <select id="mfSort">
+            <option value="ev">Best value</option>
+            <option value="chance">Highest chance of success</option>
+            <option value="start">Starting soonest</option>
+          </select>
+        </label>
+        <button class="linkbtn" id="mClear">Clear results</button>
+        <span class="shown" id="mShown"></span>
+      </div>
+      <div class="list" id="mList"></div>
+      <div class="empty" id="mEmpty"></div>
+    </div>
 
     <details class="explain">
       <summary>How Odd Finder ranks bets</summary>
@@ -436,6 +519,8 @@ function pickBook(key) {
   state.book = state.cfg.books.find(b => b.key === key);
   localStorage.setItem('oddfinder.book', key);
   state.results = JSON.parse(localStorage.getItem(storeKey()) || '{}');
+  try { more.rows = JSON.parse(localStorage.getItem(moreKey()) || '[]'); } catch (e) { more.rows = []; }
+  saveMore();   // drops games that have already started
   $('#start').hidden = true;
   $('#app').hidden = false;
   $('#bookName').textContent = state.book.name;
@@ -518,16 +603,17 @@ async function scan() {
 
 function setStatus(msg, err) { $('#status').textContent = msg; $('#status').className = 'status' + (err ? ' err' : ''); }
 function showCredits(q) {
-  const el = $('#credits');
-  if (state.cfg && state.cfg.demo) {
-    el.textContent = 'Demo mode uses no credits';
-  } else if (q && q.remaining != null) {
-    const left = Math.floor(+q.remaining);
-    el.innerHTML = `<b>${left.toLocaleString()}</b> API credits left`;
-    el.classList.toggle('low', left < 50);
-  } else if (!el.innerHTML) {
-    el.textContent = 'Credits left will show after a scan';
-  }
+  document.querySelectorAll('.credit-line').forEach(el => {
+    if (state.cfg && state.cfg.demo) {
+      el.textContent = 'Demo mode uses no credits';
+    } else if (q && q.remaining != null) {
+      const left = Math.floor(+q.remaining);
+      el.innerHTML = `<b>${left.toLocaleString()}</b> API credits left`;
+      el.classList.toggle('low', left < 50);
+    } else if (!el.innerHTML) {
+      el.textContent = 'Credits left will show after a scan';
+    }
+  });
 }
 
 /* ---------------- results ---------------- */
@@ -600,8 +686,15 @@ function renderResults(fresh) {
     $('#toppick').classList.toggle('fresh', !!fresh);
   }
 
-  $('#list').innerHTML = list.slice(0, 300).map((r, i) => `
-    <div class="bet" data-i="${i}" role="button" tabindex="0" aria-label="Show details for ${esc(betLabel(r))}">
+  $('#list').innerHTML = list.slice(0, 300).map((r, i) => betRow(r, i, 'main')).join('');
+  loadImages();
+  loadStats();
+}
+
+// One bet in a list. `which` says which list it belongs to, so a click opens the right bet.
+function betRow(r, i, which) {
+  return `
+    <div class="bet" data-list="${which}" data-i="${i}" role="button" tabindex="0" aria-label="Show details for ${esc(betLabel(r))}">
       <div class="rank">${i + 1}</div>
       <div class="what">${avatarFor(r)}<div><b>${esc(betLabel(r))}</b><span>${esc(r.event)}</span>${formLine(r)}${agrees(r) ? '<em class="agree">Market + stats agree</em>' : ''}</div></div>
       <div class="type">${esc(r.market_label)}<span class="when">${esc(r.sport)}, ${when(r.start)}</span></div>
@@ -615,14 +708,13 @@ function renderResults(fresh) {
         Price implies ${pct(r.book_prob)}${r.sharp ? ' <span class="tag-sharp">incl. sharp books</span>' : ''}
       </div>
       <div class="ev ${r.ev > 0 ? 'pos' : 'neg'}">${signed(r.ev)}<small>value</small></div>
-    </div>`).join('');
-  loadImages();
-  loadStats();
+    </div>`;
 }
 
 // Player props name the stat: "J. Carter Under 6.5 assists" (from the bet type, e.g. "Player assists").
+// Newer scans already include it in the name (`labeled`).
 function betLabel(r) {
-  if (!r.player) return r.selection;
+  if (r.labeled || !r.player) return r.selection;
   const stat = r.market_label.replace(/^(Player|Batter|Pitcher)\s+/i, '').toLowerCase();
   return `${r.selection} ${stat}`;
 }
@@ -659,6 +751,7 @@ function confidence(r) {
     else { score -= 1; why.push('market and stats disagree'); }
   }
   if (r.player) { score -= 1; why.push('player props are thinner markets'); }
+  if (r.estimated) { score -= 2; why.push('books only offer the "Yes" side, so their margin had to be estimated'); }
   const level = score >= 3 ? 'high' : score >= 1 ? 'medium' : 'low';
   return { level, label: level[0].toUpperCase() + level.slice(1), why: why.join(', ') };
 }
@@ -687,13 +780,14 @@ function formLine(r) {
 async function loadStats(fromTimer) {
   if (STATS.busy || (STATS.timer && !fromTimer)) return;
   STATS.timer = null;
-  const rows = Object.values(state.results).flatMap(v => v.rows).filter(r => !(statKey(r) in STATS.known));
+  const rows = Object.values(state.results).flatMap(v => v.rows).concat(more.rows)
+    .filter(r => !(statKey(r) in STATS.known));
   if (!rows.length) return;
   STATS.busy = true;
   let changed = false;
   try {
     const items = rows.map(r => ({ key: statKey(r), sport_key: r.sport_key, market: r.market, outcome: r.outcome,
-      point: r.point, home: r.home_team, away: r.away_team, fair_prob: r.fair_prob }));
+      point: r.point, home: r.home_team, away: r.away_team, team: r.team_total_for, fair_prob: r.fair_prob }));
     const res = await (await fetch('/api/stats', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }) })).json();
     changed = Object.keys(res.stats || {}).length > 0;
@@ -701,7 +795,7 @@ async function loadStats(fromTimer) {
     if (res.pending) STATS.timer = setTimeout(() => loadStats(true), 5000);
   } catch (e) { /* stats are optional; the market numbers still show */ }
   STATS.busy = false;
-  if (changed) { renderTabs(); renderResults(); }
+  if (changed) { renderTabs(); renderResults(); if (!$('#moreView').hidden) renderMore(); }
 }
 
 async function loadAccuracy() {
@@ -886,13 +980,15 @@ function explain(r) {
   // 5. Things that are always true
   risk.push(`Even at a ${pct(ch, 0)} chance of success, this bet loses about ${100 - Math.round(ch * 100)} times in 100. Value only pays off over many bets.`);
   if (r.player) risk.push('Player props are offered by fewer sportsbooks and can swing on late lineup or injury news.');
+  if (r.estimated) risk.push('Sportsbooks only offer the "Yes" side of this bet, so the bot estimated their margin (about 10%) instead of removing it exactly. Treat the chance as rough.');
   const d = daysAway(r.start);
   if (d > 3) risk.push(`The game is ${Math.round(d)} days away, so injuries and lineup news could still move the line.`);
-  const at = state.results[r.sport_key] && state.results[r.sport_key].at;
+  const at = r.scanned_at || (state.results[r.sport_key] && state.results[r.sport_key].at);
   risk.push(`Odds move. These were checked ${at ? ago(at) : 'earlier'}, so confirm the price in ${book} before you bet.`);
 
   let verdict;
-  if (r.ev > 0.03 && (!hasStats || s.prob > r.book_prob)) verdict = ['good', 'Strong value', `${book} is paying noticeably more than this bet's chances are worth.`];
+  if (r.ev > 0.03 && c.level !== 'low' && (!hasStats || s.prob > r.book_prob)) verdict = ['good', 'Strong value', `${book} is paying noticeably more than this bet's chances are worth.`];
+  else if (r.ev > 0 && c.level === 'low') verdict = ['ok', 'Possible value, rough estimate', `${book} looks like it's paying more than this bet's chances are worth, but the estimate is rough.`];
   else if (r.ev > 0) verdict = ['good', 'Value pick', `${book} is paying a little more than this bet's chances are worth.`];
   else if (r.ev > -0.02) verdict = ['ok', 'About a fair price', `${book}'s odds are close to what the bet's chances are worth, so there's no real edge.`];
   else verdict = ['bad', 'Not a value bet', `${book} is paying less than this bet's chances are worth.`];
@@ -963,10 +1059,170 @@ function openBet(r) {
   loadImages();
 }
 
-$('#list').addEventListener('click', e => { const b = e.target.closest('.bet'); if (b) openBet(state.shown[+b.dataset.i]); });
-$('#list').addEventListener('keydown', e => {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('bet')) { e.preventDefault(); openBet(state.shown[+e.target.dataset.i]); }
+const betFromRow = el => (el.dataset.list === 'more' ? more.shown : state.shown)[+el.dataset.i];
+['#list', '#mList'].forEach(id => {
+  $(id).addEventListener('click', e => { const b = e.target.closest('.bet'); if (b) openBet(betFromRow(b)); });
+  $(id).addEventListener('keydown', e => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('bet')) { e.preventDefault(); openBet(betFromRow(e.target)); }
+  });
 });
+
+/* ---------------- More bets ---------------- */
+const more = { rows: [], shown: [], games: [], groups: [], loadedLeague: null };
+const moreKey = () => `oddfinder.more.${state.cfg.demo ? 'demo.' : ''}${state.book.key}`;
+const MORE_MAX_GAMES = 10;
+
+function showView(view) {
+  document.querySelectorAll('.viewswitch button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === view)));
+  $('#mainView').hidden = view !== 'main';
+  $('#moreView').hidden = view !== 'more';
+  if (view === 'more') enterMore();
+}
+
+function enterMore() {
+  if (!$('#mLeague').options.length) {
+    const byGroup = {};
+    state.sports.forEach(s => (byGroup[s.group] = byGroup[s.group] || []).push(s));
+    $('#mLeague').innerHTML = groups().map(g => `<optgroup label="${esc(TAB_NAMES[g] || g)}">` +
+      byGroup[g].map(s => `<option value="${s.key}">${esc(s.title)}</option>`).join('') + '</optgroup>').join('');
+    const first = POPULAR.find(k => state.sports.some(s => s.key === k));
+    if (first) $('#mLeague').value = first;
+  }
+  if (more.loadedLeague !== $('#mLeague').value) loadMoreLeague();
+  renderMore();
+}
+
+// Upcoming games and available bet types for a league. Free: no credits used.
+async function loadMoreLeague() {
+  const sport = $('#mLeague').value;
+  if (!sport) return;
+  more.loadedLeague = sport;
+  $('#mGames').innerHTML = '<span class="muted">Loading games…</span>';
+  $('#mTypes').innerHTML = '';
+  try {
+    const res = await getJSON('/api/games?sport=' + encodeURIComponent(sport));
+    if (more.loadedLeague !== sport) return;          // user switched league meanwhile
+    more.games = res.games;
+    more.groups = res.groups;
+    showCredits(res.quota);
+    $('#mGames').innerHTML = res.games.length ? res.games.map(g => `
+      <label><input type="checkbox" value="${esc(g.id)}"><span>${esc(g.away)} @ ${esc(g.home)}<small>${when(g.start)}</small></span></label>`).join('')
+      : '<span class="muted">No upcoming games in this league right now.</span>';
+    $('#mTypes').innerHTML = res.groups.length ? res.groups.map(g => `
+      <label><input type="checkbox" value="${esc(g.key)}" ${g.key === 'alt' || g.key === 'team' ? 'checked' : ''}>
+        <span>${esc(g.label)}<small>${esc(g.hint)}. <span class="cost">${g.markets.length} bet type${g.markets.length > 1 ? 's' : ''}</span></small></span></label>`).join('')
+      : '<span class="muted">No extra bet types for this league.</span>';
+    document.querySelectorAll('#mGames input, #mTypes input').forEach(i => i.onchange = renderMoreScan);
+  } catch (e) {
+    $('#mGames').innerHTML = `<span class="status err">${esc(e.message)}</span>`;
+  }
+  renderMoreScan();
+}
+
+function moreSelection() {
+  const games = [...document.querySelectorAll('#mGames input:checked')].map(i => i.value);
+  const picked = [...document.querySelectorAll('#mTypes input:checked')].map(i => i.value);
+  const markets = more.groups.filter(g => picked.includes(g.key)).flatMap(g => g.markets);
+  return { games, markets };
+}
+
+function renderMoreScan() {
+  const { games, markets } = moreSelection();
+  const btn = $('#mScan');
+  const tooMany = games.length > MORE_MAX_GAMES;
+  btn.disabled = !games.length || !markets.length || tooMany;
+  const cost = state.cfg.demo ? '' : `<small>up to ${games.length * markets.length} credits</small>`;
+  btn.innerHTML = !games.length ? 'Pick games' : !markets.length ? 'Pick bet types'
+    : tooMany ? `Pick ${MORE_MAX_GAMES} games or fewer`
+    : `Scan ${games.length} game${games.length > 1 ? 's' : ''}${cost}`;
+}
+
+async function moreScan() {
+  const { games, markets } = moreSelection();
+  if (!games.length || !markets.length) return;
+  $('#mScan').disabled = true;
+  setMoreStatus(`Loading ${state.book.name}'s odds for ${games.length} game${games.length > 1 ? 's' : ''}…`);
+  try {
+    const p = new URLSearchParams({ book: state.book.key, sport: $('#mLeague').value,
+      events: games.join(','), markets: markets.join(',') });
+    const res = await getJSON('/api/more-scan?' + p);
+    const at = Date.now();
+    // Replace earlier results for these games; keep the rest.
+    more.rows = more.rows.filter(r => !games.includes(r.event_id))
+      .concat(res.rows.map(r => ({ ...r, scanned_at: at })));
+    res.rows.forEach(r => delete STATS.known[statKey(r)]);   // fresh odds: fresh stats
+    saveMore();
+    showCredits(res.quota);
+    setMoreStatus(`${res.count} bets loaded for ${games.length} game${games.length > 1 ? 's' : ''}.` +
+      (res.errors.length ? ` Some games couldn't be loaded: ${res.errors.join('; ')}` : ''), !!res.errors.length && !res.count);
+    renderMore();
+  } catch (e) {
+    setMoreStatus(e.message, true);
+  } finally {
+    renderMoreScan();
+  }
+}
+
+function saveMore() {
+  // Drop games that have started, then save so reopening the site costs nothing.
+  more.rows = more.rows.filter(r => new Date(r.start) > Date.now());
+  try { localStorage.setItem(moreKey(), JSON.stringify(more.rows)); } catch (e) { /* storage full */ }
+}
+
+function setMoreStatus(msg, err) { $('#mStatus').textContent = msg; $('#mStatus').className = 'status' + (err ? ' err' : ''); }
+
+function fillSelect(sel, items, allLabel) {   // items: [[value, label]]
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">${allLabel}</option>` + items.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+  sel.value = items.some(([v]) => v === cur) ? cur : '';
+}
+
+function renderMore() {
+  const rows = more.rows;
+  $('#mFilters').hidden = !rows.length;
+  const uniq = (arr) => [...new Map(arr.map(x => [x[0], x])).values()];
+  fillSelect($('#mfLeague'), uniq(rows.map(r => [r.sport_key, r.sport])).sort((a, b) => a[1].localeCompare(b[1])), 'All leagues');
+  const lg = $('#mfLeague').value;
+  const inLeague = rows.filter(r => !lg || r.sport_key === lg);
+  fillSelect($('#mfGame'), uniq(inLeague.map(r => [r.event_id, `${r.event}, ${when(r.start)}`])), 'All games');
+  const game = $('#mfGame').value;
+  const inGame = inLeague.filter(r => !game || r.event_id === game);
+  fillSelect($('#mfType'), uniq(inGame.map(r => [r.market_label, r.market_label])).sort((a, b) => a[1].localeCompare(b[1])), 'All bet types');
+  const names = [...new Set(inGame.flatMap(r => [r.player, r.team_total_for, r.home_team, r.away_team]).filter(Boolean))].sort();
+  $('#mWhoList').innerHTML = names.map(n => `<option value="${esc(n)}">`).join('');
+
+  const type = $('#mfType').value, who = $('#mfWho').value.trim().toLowerCase();
+  const conf = $('#mfConf').value, key = $('#mfSort').value;
+  const list = inGame
+    .filter(r => (!type || r.market_label === type)
+      && (!who || [r.selection, r.player, r.team_total_for, r.pick_team].some(x => x && x.toLowerCase().includes(who)))
+      && (!conf || CONF_RANK[confidence(r).level] >= CONF_RANK[conf]))
+    .sort((a, b) => key === 'start' ? a.start.localeCompare(b.start)
+      : key === 'chance' ? chance(b) - chance(a) : b.ev - a.ev);
+
+  more.shown = list.slice(0, 300);
+  $('#mShown').textContent = list.length ? `Showing ${more.shown.length} of ${list.length}` : '';
+  $('#mList').innerHTML = more.shown.map((r, i) => betRow(r, i, 'more')).join('');
+  $('#mEmpty').innerHTML = !rows.length
+    ? '<h3>No extra bets loaded yet</h3><p>Pick a league, the games and the bet types above, then press Scan.</p>'
+    : !list.length ? '<h3>No bets match these filters</h3><p>Try another player, game or bet type.</p>' : '';
+  $('#mEmpty').hidden = !$('#mEmpty').innerHTML;
+  loadImages();
+  loadStats();
+}
+
+document.querySelectorAll('.viewswitch button').forEach(b => b.onclick = () => showView(b.dataset.view));
+$('#mLeague').addEventListener('change', loadMoreLeague);
+$('#mAllGames').onclick = () => {
+  const boxes = [...document.querySelectorAll('#mGames input')];
+  const allOn = boxes.length && boxes.slice(0, MORE_MAX_GAMES).every(i => i.checked);
+  boxes.forEach((i, n) => i.checked = !allOn && n < MORE_MAX_GAMES);
+  renderMoreScan();
+};
+$('#mScan').onclick = moreScan;
+$('#mClear').onclick = () => { more.rows = []; saveMore(); setMoreStatus(''); renderMore(); };
+['#mfLeague', '#mfGame', '#mfType', '#mfConf', '#mfSort'].forEach(s => $(s).addEventListener('change', renderMore));
+$('#mfWho').addEventListener('input', renderMore);
 $('#toppick').addEventListener('click', () => openBet(state.topPick));
 $('#toppick').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBet(state.topPick); } });
 // click outside the pop-up closes it (Esc closes it too, built in)

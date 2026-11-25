@@ -266,6 +266,7 @@ class Model:
         self.log.append({"season": season, "date": g["date"], "p": p, "diff": diff,
                          "margin": g["hs"] - g["as"], "total": g["hs"] + g["as"],
                          "exp_total": (eh + ea) if eh is not None else None,
+                         "exp_h": eh, "exp_a": ea, "hs": g["hs"], "as": g["as"],
                          "games_h": len(self.recent.get(h, [])), "games_a": len(self.recent.get(a, []))})
 
         # learn from the result
@@ -363,6 +364,11 @@ class LeagueStats:
             tot = [e["total"] - e["exp_total"] for e in train if e["exp_total"] is not None]
             model.total_bias = sum(tot) / max(len(tot), 1)
             model.total_sd = max(math.sqrt(sum((t - model.total_bias) ** 2 for t in tot) / max(len(tot), 1)), 1.0)
+            # One team's score (for team totals): how far it lands from its expected points.
+            team_res = [x for e in train if e["exp_h"] is not None
+                        for x in (e["hs"] - e["exp_h"], e["as"] - e["exp_a"])]
+            model.team_bias = sum(team_res) / max(len(team_res), 1)
+            model.team_sd = max(math.sqrt(sum((x - model.team_bias) ** 2 for x in team_res) / max(len(team_res), 1)), 0.5)
             report = self._accuracy(model, train, test, test_season)
             teams = {normalize(t): t for t in model.elo}
             with self.lock:
@@ -433,7 +439,9 @@ class LeagueStats:
         if not home or not away:
             return {"reason": "Team not found in past results"}
         usable = report["usable"]
-        market, outcome, point = item.get("market"), item.get("outcome"), item.get("point")
+        market, outcome, point = item.get("market") or "", item.get("outcome"), item.get("point")
+        if market.startswith("alternate_"):      # alternate lines: same model, different number
+            market = market[len("alternate_"):]
         diff = m.elo_diff(home, away)
         out = {"form_home": m.form(home), "form_away": m.form(away)}
         if market == "h2h":
@@ -464,6 +472,22 @@ class LeagueStats:
             p_over = prob_over(mu, m.total_sd, point)
             out["prob"] = p_over if outcome == "Over" else 1 - p_over
             out["expected_total"] = round(mu, 1)
+        elif market == "team_totals" and point is not None:
+            if not usable["total"]:
+                return dict(out, reason="Stats weren't accurate enough for this league's totals")
+            team = self.match(item.get("team"))
+            if team not in (home, away):
+                return dict(out, reason="Team not found in past results")
+            opp = away if team == home else home
+            exp = m.expected_points(team, opp, team == home)
+            if exp is None:
+                return dict(out, reason="Not enough scoring data")
+            mu = exp + m.team_bias
+            p_over = prob_over(mu, m.team_sd, point)
+            out["prob"] = p_over if outcome == "Over" else 1 - p_over
+            out["expected_team"] = round(mu, 1)
+        elif any(market.endswith(s) for s in ("_q1", "_q2", "_q3", "_q4", "_h1", "_h2", "_p1", "_p2", "_p3", "_innings")):
+            return dict(out, reason="Stats don't cover quarter, half or period bets yet")
         else:
             return dict(out, reason="Stats don't cover this bet type yet")
         out["prob"] = round(out["prob"], 4)
