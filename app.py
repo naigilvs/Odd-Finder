@@ -630,6 +630,15 @@ def demo_events(sport, target, include_props):
     return events
 
 
+CODE_FILES = [ROOT / "app.py", ROOT / "stats.py"]
+_started_with = {f: f.stat().st_mtime for f in CODE_FILES if f.exists()}
+
+
+def code_changed_since_start():
+    """True when app.py or stats.py was edited after this server started (it needs a restart)."""
+    return any(f.exists() and f.stat().st_mtime != t for f, t in _started_with.items())
+
+
 def demo_more_event(sport, eid, markets):
     """Made-up odds for the More bets section: every chosen bet type for one demo game."""
     ev = next((e for e in demo_events(sport, "fanduel", False) if e["id"] == eid), None)
@@ -776,6 +785,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"books": [{"key": k, "name": v} for k, v in TARGET_BOOKS.items()],
                                 "coming_soon": COMING_SOON_BOOKS,
                                 "demo": DEMO, "has_key": bool(API_KEY), "quota": _quota,
+                                "outdated": code_changed_since_start(),
                                 "prop_sports": list(PROP_MARKETS)})
             elif url.path == "/api/accuracy":
                 self.send_json(stats.accuracy())

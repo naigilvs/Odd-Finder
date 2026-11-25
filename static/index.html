@@ -343,6 +343,7 @@
       </div>
     </div>
   </header>
+  <div class="demo-bar" id="restartBar" hidden><div class="wrap">Odd Finder was updated after it started, so some features won't work yet. Restart it: press Ctrl+C in the Terminal window running it, run <code>python3 app.py</code> again, then refresh this page.</div></div>
   <div class="demo-bar" id="demoBar" hidden><div class="wrap">Demo mode: these teams and odds are made up. Add your API key to config.json to see real lines.</div></div>
 
   <main class="wrap">
@@ -525,6 +526,8 @@ function pickBook(key) {
   $('#app').hidden = false;
   $('#bookName').textContent = state.book.name;
   $('#demoBar').hidden = !state.cfg.demo;
+  // Old servers don't send `outdated`; a page newer than its server is the same problem.
+  $('#restartBar').hidden = !(state.cfg.outdated || !('outdated' in state.cfg));
   renderAll();
 }
 
