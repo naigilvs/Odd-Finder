@@ -519,6 +519,43 @@ def warm_up():
         lg.refresh_if_stale()
 
 
+_last_results_refresh = {}
+
+
+def _same_team(a, b):
+    """Team names from the odds feed and ESPN: equal, or the same nickname ("Lakers")."""
+    a, b = ALIASES.get(normalize(a), normalize(a)), ALIASES.get(normalize(b), normalize(b))
+    return a == b or (a and b and a.split()[-1] == b.split()[-1])
+
+
+def find_final_score(sport_key, home, away, start_iso, refresh=False):
+    """Final score of one game as (home points, away points), using the odds feed's home and
+    away teams, or None if it isn't finished or the league isn't covered. `refresh` downloads
+    any new results first (at most every 15 minutes per league)."""
+    lg = _leagues.get(sport_key)
+    if not lg or not home or not away:
+        return None
+    if refresh and time.time() - _last_results_refresh.get(sport_key, 0) > 900:
+        _last_results_refresh[sport_key] = time.time()
+        try:
+            lg.store.update()
+        except Exception:
+            pass
+    try:
+        start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    for g in reversed(lg.store.games()):
+        when = datetime.fromisoformat(g["date"].replace("Z", "+00:00"))
+        if abs((when - start).total_seconds()) > 18 * 3600:
+            continue
+        if _same_team(home, g["home"]) and _same_team(away, g["away"]):
+            return g["hs"], g["as"]
+        if _same_team(home, g["away"]) and _same_team(away, g["home"]):   # listed the other way round
+            return g["as"], g["hs"]
+    return None
+
+
 def predict_many(items):
     """items: [{key, sport_key, market, outcome, point, home, away}] -> ({key: result}, pending)"""
     results, pending = {}, 0

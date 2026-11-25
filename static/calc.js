@@ -69,7 +69,48 @@
     });
   }
 
-  const api = { MARKET_WEIGHT, chance, agrees, confidence, CONF_RANK, betLabel, americanOdds, lineGroup, bestLines };
+  // ---- saved picks
+  // Profit on one pick at a given stake (a push returns the stake: 0 profit).
+  function pickProfit(p, stake) {
+    if (p.status === 'won') return stake * (p.decimal - 1);
+    if (p.status === 'lost') return -stake;
+    return 0;
+  }
+
+  // Record, win rate vs. what the bot expected, and profit, overall and by confidence level.
+  function summarize(picks) {
+    const settled = picks.filter(p => p.status === 'won' || p.status === 'lost' || p.status === 'push');
+    const decided = settled.filter(p => p.status !== 'push');
+    const wins = decided.filter(p => p.status === 'won').length;
+    const expectedWins = decided.reduce((a, p) => a + (p.chance != null ? p.chance : p.fair_prob || 0), 0);
+    const staked = settled.filter(p => p.stake > 0);
+    const byConf = {};
+    for (const level of ['High', 'Medium', 'Low']) {
+      const g = decided.filter(p => p.confidence === level);
+      byConf[level] = {
+        picks: g.length,
+        wins: g.filter(p => p.status === 'won').length,
+        winRate: g.length ? g.filter(p => p.status === 'won').length / g.length : null,
+        expectedRate: g.length ? g.reduce((a, p) => a + (p.chance != null ? p.chance : 0), 0) / g.length : null,
+      };
+    }
+    return {
+      total: picks.length,
+      pending: picks.length - settled.length,
+      wins, losses: decided.length - wins, pushes: settled.length - decided.length,
+      winRate: decided.length ? wins / decided.length : null,
+      expectedRate: decided.length ? expectedWins / decided.length : null,
+      flatProfit: settled.reduce((a, p) => a + pickProfit(p, 100), 0),     // if every pick had been $100
+      flatPicks: settled.length,
+      realProfit: staked.reduce((a, p) => a + pickProfit(p, p.stake), 0),
+      realRisked: staked.reduce((a, p) => a + p.stake, 0),
+      stakedPicks: staked.length,
+      byConf,
+    };
+  }
+
+  const api = { MARKET_WEIGHT, chance, agrees, confidence, CONF_RANK, betLabel, americanOdds, lineGroup, bestLines,
+                pickProfit, summarize };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Calc = api;
 })(this);

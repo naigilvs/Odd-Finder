@@ -68,3 +68,24 @@ test('player props group by player and side', () => {
   const best = Calc.bestLines([p('A', 'Over', 20.5, 0.01), p('A', 'Over', 24.5, 0.03), p('A', 'Under', 20.5, 0), p('B', 'Over', 20.5, 0)]);
   assert.equal(best.length, 3);
 });
+
+test('saved picks: profit and summary', () => {
+  const p = (status, decimal, chance, confidence, stake) => ({ status, decimal, chance, confidence, stake });
+  assert.equal(Calc.pickProfit(p('won', 2.5), 100), 150);
+  assert.equal(Calc.pickProfit(p('lost', 2.5), 100), -100);
+  assert.equal(Calc.pickProfit(p('push', 2.5), 100), 0);
+  const s = Calc.summarize([
+    p('won', 2.0, 0.6, 'High', 50), p('lost', 1.8, 0.6, 'High'), p('won', 3.0, 0.3, 'Low'),
+    p('push', 1.9, 0.5, 'Medium'), p('pending', 2.0, 0.5, 'High'),
+  ]);
+  assert.equal(s.total, 5);
+  assert.equal(s.pending, 1);
+  assert.deepEqual([s.wins, s.losses, s.pushes], [2, 1, 1]);
+  assert.equal(s.winRate, 2 / 3);
+  assert.ok(Math.abs(s.expectedRate - 0.5) < 1e-9);         // (0.6 + 0.6 + 0.3) / 3
+  assert.equal(s.flatProfit, 100 - 100 + 200 + 0);
+  assert.equal(s.realProfit, 50);
+  assert.equal(s.byConf.High.picks, 2);
+  assert.equal(s.byConf.High.winRate, 0.5);
+  assert.equal(s.byConf.Medium.picks, 0);                    // pushes don't count as decided
+});

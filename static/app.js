@@ -221,7 +221,7 @@ function renderResults(fresh) {
 function betRow(r, i, which) {
   return `
     <div class="bet" data-list="${which}" data-i="${i}" role="button" tabindex="0" aria-label="Show details for ${esc(betLabel(r))}">
-      <div class="rank">${i + 1}</div>
+      <div class="rank">${i + 1}${starButton(r)}</div>
       <div class="what">${avatarFor(r)}<div><b>${esc(betLabel(r))}</b><span>${esc(r.event)}</span>${formLine(r)}${r.others && r.others.length ? `<span class="more-lines">+${r.others.length} other line${r.others.length > 1 ? 's' : ''} for this bet</span>` : ''}${agrees(r) ? '<em class="agree">Market + stats agree</em>' : ''}</div></div>
       <div class="type">${esc(r.market_label)}<span class="when">${esc(r.sport)}, ${when(r.start)}</span></div>
       <div class="odds">${r.american}<small>${r.decimal.toFixed(2)}</small></div>
@@ -389,6 +389,7 @@ function renderAll(fresh) {
 /* ---------------- boot ---------------- */
 async function init() {
   state.cfg = await getJSON('/api/config');
+  await loadPicks();
   showCredits(state.cfg.quota);
   try {
     state.sports = await getJSON('/api/sports');
@@ -511,6 +512,12 @@ function betDetails(r) {
       <h2 id="bmTitle">${esc(betLabel(r))}</h2>
       <div class="sub">${esc(r.event)}, ${esc(r.sport)}, ${when(r.start)}. ${esc(r.market_label)}.</div>
     </div></div>
+    <div class="bm-save">
+      ${savedPick(r)
+        ? `<button class="btn-save on" id="bmSave">★ Saved to My picks</button><span class="muted">Click to remove it.</span>`
+        : `<button class="btn-save" id="bmSave">☆ Save pick</button>
+           <label>Stake (optional) $<input id="bmStake" type="number" min="0" step="1" placeholder="0"></label>`}
+    </div>
     <div class="bm-verdict ${tone}"><b>${title}.</b>${esc(line)}</div>
     <div class="bm-nums">
       <div class="hl"><b>${pct(chance(r), 0)}</b>chance of success</div>
@@ -562,6 +569,13 @@ function openBet(r) {
   $('#bmBody').innerHTML = betDetails(r);
   $('#betModal').showModal();
   $('#bmBody .close').onclick = () => $('#betModal').close();
+  $('#bmSave').onclick = async () => {
+    const stake = $('#bmStake') ? +$('#bmStake').value || null : null;
+    await toggleSave(r, stake);
+    const top = $('#betModal').scrollTop;
+    openBet(r);                                   // redraw with the new saved state
+    $('#betModal').scrollTop = top;
+  };
   const lines = r.others ? [r, ...r.others] : [];
   document.querySelectorAll('#bmBody .line').forEach(b => b.onclick = () => {
     const pick = lines[+b.dataset.line];
@@ -573,7 +587,12 @@ function openBet(r) {
 
 const betFromRow = el => (el.dataset.list === 'more' ? more.shown : state.shown)[+el.dataset.i];
 ['#list', '#mList'].forEach(id => {
-  $(id).addEventListener('click', e => { const b = e.target.closest('.bet'); if (b) openBet(betFromRow(b)); });
+  $(id).addEventListener('click', e => {
+    const b = e.target.closest('.bet');
+    if (!b) return;
+    if (e.target.closest('.star')) { toggleSave(betFromRow(b)); return; }   // the star saves, it doesn't open
+    openBet(betFromRow(b));
+  });
   $(id).addEventListener('keydown', e => {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('bet')) { e.preventDefault(); openBet(betFromRow(e.target)); }
   });
@@ -588,7 +607,9 @@ function showView(view) {
   document.querySelectorAll('.viewswitch button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === view)));
   $('#mainView').hidden = view !== 'main';
   $('#moreView').hidden = view !== 'more';
+  $('#picksView').hidden = view !== 'picks';
   if (view === 'more') enterMore();
+  if (view === 'picks') { renderPicks(); checkResults(); }
 }
 
 function enterMore() {
@@ -741,4 +762,181 @@ $('#toppick').addEventListener('click', () => openBet(state.topPick));
 $('#toppick').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBet(state.topPick); } });
 // click outside the pop-up closes it (Esc closes it too, built in)
 $('#betModal').addEventListener('click', e => { if (e.target === $('#betModal')) $('#betModal').close(); });
+
+/* ---------------- My picks ---------------- */
+const PICKS = { list: [], checking: false };
+const pickKey = r => `${r.event_id}|${r.market}|${r.selection}`;
+const savedPick = r => r && PICKS.list.find(p => pickKey(p) === pickKey(r));
+const dollars = x => (x < 0 ? '−$' : '$') + Math.abs(x).toFixed(2).replace(/\.00$/, '');
+const signedDollars = x => (x > 0 ? '+' : '') + dollars(x);
+
+function starButton(r) {
+  const on = !!savedPick(r);
+  return `<button class="star${on ? ' on' : ''}" aria-label="${on ? 'Remove from My picks' : 'Save to My picks'}"
+    title="${on ? 'Saved. Click to remove' : 'Save pick'}">${on ? '★' : '☆'}</button>`;
+}
+
+function toast(msg) {
+  let t = $('#toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
+  t.textContent = msg;
+  t.className = 'show';
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.className = '', 2600);
+}
+
+async function picksApi(body) {
+  const r = await fetch('/api/picks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  if (j.picks) PICKS.list = j.picks;
+  const pending = PICKS.list.filter(p => p.status === 'pending').length;
+  $('#pickCount').textContent = PICKS.list.length ? (pending ? `${pending} open` : PICKS.list.length) : '';
+  return j;
+}
+
+async function loadPicks() { try { await picksApi({ action: 'list' }); } catch (e) { /* picks are optional */ } }
+
+// Save a bet to My picks, or remove it if it's already saved.
+async function toggleSave(r, stake) {
+  if (!r) return;
+  const existing = savedPick(r);
+  try {
+    if (existing) {
+      await picksApi({ action: 'delete', id: existing.id });
+      toast('Removed from My picks');
+    } else {
+      const s = statOf(r);
+      const pick = {
+        event_id: r.event_id, sport_key: r.sport_key, sport: r.sport, event: r.event, home_team: r.home_team,
+        away_team: r.away_team, start: r.start, market: r.market, market_label: r.market_label, selection: r.selection,
+        label: betLabel(r), outcome: r.outcome, team_total_for: r.team_total_for, player: r.player, american: r.american,
+        book: state.book.name, confidence: confidence(r).label, point: r.point, decimal: r.decimal, chance: chance(r),
+        fair_prob: r.fair_prob, stats_prob: s && s.prob != null ? s.prob : undefined, book_prob: r.book_prob, ev: r.ev,
+      };
+      await picksApi({ action: 'save', pick, stake });
+      toast('Saved to My picks');
+    }
+  } catch (e) {
+    toast(e.message);
+  }
+  refreshStars();
+  if (!$('#picksView').hidden) renderPicks();
+}
+
+function refreshStars() {
+  document.querySelectorAll('.bet[data-list]').forEach(el => {
+    const r = betFromRow(el), star = el.querySelector('.star');
+    if (r && star) star.outerHTML = starButton(r);
+  });
+}
+
+async function checkResults() {
+  if (PICKS.checking || !PICKS.list.some(p => p.status === 'pending')) return;
+  PICKS.checking = true;
+  $('#pCheck').disabled = true;
+  $('#pCheck').textContent = 'Checking…';
+  try {
+    const j = await picksApi({ action: 'grade' });
+    $('#pChecked').textContent = j.graded ? `${j.graded} result${j.graded > 1 ? 's' : ''} updated just now` : 'Checked just now: no new results';
+  } catch (e) {
+    $('#pChecked').textContent = e.message;
+  }
+  PICKS.checking = false;
+  $('#pCheck').disabled = false;
+  $('#pCheck').textContent = 'Check results';
+  renderPicks();
+}
+
+function pickStatus(p) {
+  const started = new Date(p.start) <= Date.now();
+  if (p.status !== 'pending') {
+    const word = { won: 'Won', lost: 'Lost', push: 'Push' }[p.status];
+    return `<span class="badge ${p.status}">${word}</span>${p.final ? `<span class="final">${esc(p.final)}</span>` : ''}
+      <span class="muted small">${p.graded_by === 'auto' ? 'Checked automatically' : 'Marked by you'}</span>
+      <button class="linkbtn" data-act="pending" data-id="${p.id}">Undo</button>`;
+  }
+  if (!started) return `<span class="badge pending">Upcoming</span><span class="muted small">Starts ${when(p.start)}</span>`;
+  if (p.auto) return `<span class="badge pending">Waiting for result</span><span class="muted small">Checked automatically after the game</span>`;
+  return `<span class="badge pending">Mark the result</span>
+    <span class="marks">
+      <button data-act="won" data-id="${p.id}">Won</button>
+      <button data-act="lost" data-id="${p.id}">Lost</button>
+      <button data-act="push" data-id="${p.id}">Push</button>
+    </span>`;
+}
+
+function renderPicks() {
+  const all = PICKS.list;
+  const s = Calc.summarize(all);
+  const tone = x => x > 0 ? 'up' : x < 0 ? 'down' : '';
+  $('#pSummary').innerHTML = all.length ? `
+    <div><b>${s.total}</b>picks saved${s.pending ? `, ${s.pending} waiting` : ''}</div>
+    <div><b>${s.wins}-${s.losses}${s.pushes ? `-${s.pushes}` : ''}</b>record (won-lost${s.pushes ? '-push' : ''})</div>
+    <div><b>${s.winRate != null ? pct(s.winRate, 0) : '–'}</b>${s.expectedRate != null ? `won, bot expected ${pct(s.expectedRate, 0)}` : 'win rate, once picks finish'}</div>
+    <div><b class="${tone(s.flatProfit)}">${s.flatPicks ? signedDollars(s.flatProfit) : '–'}</b>if you'd bet $100 on each</div>
+    <div><b class="${tone(s.realProfit)}">${s.stakedPicks ? signedDollars(s.realProfit) : '–'}</b>${s.stakedPicks ? `your profit on ${dollars(s.realRisked)} staked` : 'your profit: add a stake to track it'}</div>` : '';
+
+  const levels = Object.entries(s.byConf).filter(([, v]) => v.picks);
+  $('#pByConf').innerHTML = levels.length ? `
+    <h3>By confidence</h3>
+    <p class="muted">If the bot is well calibrated, each level wins about as often as it expected. A few dozen finished picks are needed before this means much.</p>
+    <table><tr><th>Confidence</th><th class="n">Finished</th><th class="n">Won</th><th class="n">Bot expected</th></tr>
+    ${levels.map(([lvl, v]) => `<tr><td>${lvl}</td><td class="n">${v.picks}</td><td class="n">${pct(v.winRate, 0)}</td><td class="n">${pct(v.expectedRate, 0)}</td></tr>`).join('')}
+    </table>` : '';
+
+  const f = $('#pfStatus').value;
+  const list = all.filter(p => !f || (f === 'settled' ? p.status !== 'pending' : p.status === f))
+    .sort((a, b) => (a.status === 'pending') !== (b.status === 'pending') ? (a.status === 'pending' ? -1 : 1)
+      : a.status === 'pending' ? a.start.localeCompare(b.start) : b.start.localeCompare(a.start));
+  $('#pShown').textContent = list.length ? `Showing ${list.length} of ${all.length}` : '';
+  $('#pFilters').hidden = !all.length;
+  $('#pList').innerHTML = list.map(p => {
+    const profit = p.status !== 'pending' && p.stake ? Calc.pickProfit(p, p.stake) : null;
+    return `
+    <div class="pick ${p.status}">
+      <div class="pmain">
+        <b>${esc(p.label || p.selection)}</b>
+        <span>${esc(p.event)}, ${esc(p.sport)}, ${when(p.start)}. ${esc(p.market_label)}.</span>
+        <span class="muted small">Saved at ${esc(p.american)} on ${esc(p.book || 'FanDuel')}: ${pct(p.chance || p.fair_prob || 0, 0)} chance of success, ${esc(p.confidence || '–')} confidence, ${signed(p.ev || 0)} value</span>
+      </div>
+      <div class="pres">${pickStatus(p)}</div>
+      <div class="pact">
+        <label>Stake $<input type="number" min="0" step="1" value="${p.stake || ''}" placeholder="0" data-stake="${p.id}"></label>
+        ${profit != null ? `<span class="${tone(profit)}">${signedDollars(profit)}</span>` : ''}
+        <button class="linkbtn remove" data-act="delete" data-id="${p.id}" aria-label="Remove this pick">Remove</button>
+      </div>
+    </div>`;
+  }).join('');
+  $('#pEmpty').innerHTML = !all.length
+    ? '<div class="big" aria-hidden="true">☆</div><h3>No saved picks yet</h3><p>Click the ☆ next to any bet, or Save pick in its details, to keep track of it here.</p>'
+    : !list.length ? '<h3>No picks match this filter</h3>' : '';
+  $('#pEmpty').hidden = !$('#pEmpty').innerHTML;
+}
+
+$('#pList').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const { act, id } = b.dataset;
+  try {
+    if (act === 'delete') {
+      if (!confirm('Remove this pick from My picks? Its result will be deleted too.')) return;
+      await picksApi({ action: 'delete', id });
+    } else {
+      await picksApi({ action: 'update', id, status: act });
+    }
+  } catch (err) { toast(err.message); }
+  renderPicks();
+  refreshStars();
+});
+$('#pList').addEventListener('change', async e => {
+  const id = e.target.dataset.stake;
+  if (!id) return;
+  try { await picksApi({ action: 'update', id, stake: +e.target.value || null }); } catch (err) { toast(err.message); }
+  renderPicks();
+});
+$('#pCheck').onclick = () => checkResults();
+$('#pfStatus').addEventListener('change', renderPicks);
+
+// Start the app (kept last so everything above is defined first).
 init().catch(e => { document.body.innerHTML = `<p style="padding:40px">Odd Finder couldn't start: ${esc(e.message)}</p>`; });

@@ -317,3 +317,60 @@
   .cmp .fair { color: var(--turf); }
   .cmp .bar.fair i { background: var(--turf); }
   .cmp small { color: var(--slate); font-weight: 400; }
+
+  /* ---------- saving picks ---------- */
+  .bet .rank { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .star { background: none; border: 0; padding: 0 2px; font-size: 20px; line-height: 1; color: var(--slate); cursor: pointer; }
+  .star:hover { color: var(--amber); }
+  .star.on { color: var(--amber); }
+  .bm-save { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 14px; font-size: 14px; color: var(--slate); }
+  .bm-save label { display: flex; align-items: center; gap: 6px; }
+  .bm-save input { width: 90px; background: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; color: var(--chalk); }
+  .btn-save { background: var(--panel-2); color: var(--chalk); border: 1px solid var(--amber); border-radius: 8px; padding: 7px 14px; font: 600 16px var(--body); cursor: pointer; }
+  .btn-save.on { background: var(--amber); color: var(--ink); }
+  #toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none; z-index: 20;
+    background: var(--chalk); color: var(--ink); font-weight: 600; padding: 10px 18px; border-radius: 8px; transition: opacity .2s, transform .2s;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .viewswitch .count { font: 500 13px var(--body); background: var(--amber); color: var(--ink); border-radius: 999px; padding: 1px 8px; margin-left: 4px; vertical-align: middle; }
+  .viewswitch .count:empty { display: none; }
+
+  /* ---------- my picks ---------- */
+  .picks-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+  .picks-top .more-intro { flex: 1 1 420px; }
+  .picks-top .scan-col { margin-top: 20px; }
+  .psum { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 10px 0 6px; }
+  .psum div { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 13px; color: var(--slate); }
+  .psum b { display: block; font: 700 30px/1.1 var(--display); color: var(--chalk); }
+  .psum b.up, .pact .up { color: var(--turf); }
+  .psum b.down, .pact .down { color: var(--flag); }
+  .pconf { margin: 14px 0 4px; max-width: 560px; }
+  .pconf h3 { font: 600 20px var(--display); margin: 8px 0 4px; }
+  .pconf p { margin: 0 0 6px; font-size: 14px; }
+  .pconf table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .pconf th, .pconf td { text-align: left; padding: 5px 0; border-bottom: 1px solid var(--line); }
+  .pconf th { color: var(--slate); font-weight: 500; }
+  .pconf .n { text-align: right; font-variant-numeric: tabular-nums; }
+  .plist { border-top: 1px solid var(--line); }
+  .pick { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.4fr) auto; gap: 14px 20px; align-items: center; padding: 14px 6px; border-bottom: 1px solid var(--line); border-left: 4px solid transparent; }
+  .pick.won { border-left-color: var(--turf); }
+  .pick.lost { border-left-color: var(--flag); }
+  .pick.push { border-left-color: var(--slate); }
+  .pmain b { display: block; font-size: 17px; }
+  .pmain span { display: block; font-size: 14px; color: var(--slate); }
+  .small { font-size: 12px; }
+  .pres { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 14px; }
+  .pres .final { color: var(--chalk); }
+  .badge { font-size: 12px; font-weight: 700; border-radius: 4px; padding: 2px 8px; }
+  .badge.won { background: var(--turf); color: var(--ink); }
+  .badge.lost { background: var(--flag); color: var(--ink); }
+  .badge.push { background: var(--slate); color: var(--ink); }
+  .badge.pending { border: 1px solid var(--line); color: var(--slate); }
+  .marks { display: inline-flex; gap: 6px; }
+  .marks button { background: var(--panel-2); color: var(--chalk); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 13px; }
+  .marks button:hover { border-color: var(--amber); }
+  .pact { display: flex; align-items: center; gap: 12px; font-size: 14px; color: var(--slate); white-space: nowrap; }
+  .pact input { width: 76px; background: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; color: var(--chalk); }
+  .pact .remove { color: var(--slate); }
+  @media (max-width: 860px) { .pick { grid-template-columns: 1fr; } }

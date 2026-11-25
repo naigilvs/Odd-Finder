@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import picks
 import stats
 
 ROOT = Path(__file__).resolve().parent
@@ -388,6 +389,7 @@ class ImageFinder:
 
 
 IMAGES = None
+PICKS = picks.PickStore()       # saved picks, in data/picks.json
 
 
 # --------------------------------------------------------------------------- analysis
@@ -674,7 +676,7 @@ def demo_events(sport, target, include_props):
     return events
 
 
-CODE_FILES = [ROOT / "app.py", ROOT / "stats.py"]
+CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py"]
 _started_with = {f: f.stat().st_mtime for f in CODE_FILES if f.exists()}
 
 
@@ -786,15 +788,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in ("/api/images", "/api/stats"):
+        if path not in ("/api/images", "/api/stats", "/api/picks"):
             return self.send_json({"error": "Not found"}, 404)
         length = int(self.headers.get("Content-Length") or 0)
         if length > 2_000_000:
             return self.send_json({"error": "Request too large"}, 413)
         try:
-            items = json.loads(self.rfile.read(length) or b"{}").get("items", [])
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError
         except ValueError:
             return self.send_json({"error": "Bad JSON"}, 400)
+        if path == "/api/picks":
+            return self.handle_picks(body)
+        items = body.get("items", [])
         items = [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
         if path == "/api/images":
             found, pending = IMAGES.get(items)
@@ -803,6 +810,26 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"stats": demo_stats(items), "pending": 0})
         found, pending = stats.predict_many(items)
         self.send_json({"stats": found, "pending": pending})
+
+    def handle_picks(self, body):
+        """Saved picks: list, save, update (stake / manual result), delete, grade."""
+        action = body.get("action", "list")
+        try:
+            if action == "save":
+                pick = PICKS.save(body.get("pick") or {}, body.get("stake"))
+                return self.send_json({"pick": pick, "picks": PICKS.all()})
+            if action == "update":
+                PICKS.update(str(body.get("id")), {k: body[k] for k in ("stake", "status") if k in body})
+            elif action == "delete":
+                PICKS.delete(str(body.get("id")))
+            elif action == "grade":
+                graded = 0 if DEMO else PICKS.grade_pending(refresh=True)
+                return self.send_json({"picks": PICKS.all(), "graded": graded})
+            elif action != "list":
+                return self.send_json({"error": "Unknown action"}, 400)
+            self.send_json({"picks": PICKS.all()})
+        except (KeyError, ValueError) as e:
+            self.send_json({"error": str(e).strip("'\"")}, 400)
 
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
@@ -873,7 +900,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global DEMO, API_KEY, IMAGES
+    global DEMO, API_KEY, IMAGES, PICKS
     ap = argparse.ArgumentParser(description="Betting value finder")
     ap.add_argument("--demo", action="store_true", help="use made-up sample data")
     ap.add_argument("--port", type=int, default=8765)
@@ -881,6 +908,8 @@ def main():
     API_KEY = load_api_key()
     DEMO = args.demo or not API_KEY
     IMAGES = ImageFinder()
+    if DEMO:   # keep made-up demo picks apart from real ones
+        PICKS = picks.PickStore(stats.DATA_DIR / "picks_demo.json")
     stats.warm_up()   # start downloading past results in the background
     if DEMO and not args.demo:
         print("No API key found (ODDS_API_KEY or config.json), so running with DEMO data.")

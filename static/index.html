@@ -42,6 +42,7 @@
     <div class="viewswitch" role="tablist" aria-label="Which bets">
       <button role="tab" data-view="main" aria-selected="true">Main lines<small>Moneyline, spread, total</small></button>
       <button role="tab" data-view="more" aria-selected="false">More bets<small>Alt lines, team totals, halves, props</small></button>
+      <button role="tab" data-view="picks" aria-selected="false">My picks <span class="count" id="pickCount"></span><small>Bets you saved and how they did</small></button>
     </div>
 
     <div id="mainView">
@@ -141,6 +142,33 @@
       </div>
       <div class="list" id="mList"></div>
       <div class="empty" id="mEmpty"></div>
+    </div>
+
+    <!-- My picks: saved bets and how they turned out -->
+    <div id="picksView" hidden>
+      <div class="picks-top">
+        <p class="more-intro">Save a bet with the ☆ next to it or the Save button in its details. Moneylines, spreads, totals and team totals in the NFL, NBA, NHL and MLB are checked automatically after the game. Mark anything else yourself.</p>
+        <div class="scan-col">
+          <button class="btn-scan" id="pCheck">Check results</button>
+          <div class="credit-line" id="pChecked">Free: uses no credits</div>
+        </div>
+      </div>
+      <div class="psum" id="pSummary"></div>
+      <div class="pconf" id="pByConf"></div>
+      <div class="filters" id="pFilters">
+        <label>Show
+          <select id="pfStatus">
+            <option value="">All picks</option>
+            <option value="pending">Waiting for result</option>
+            <option value="settled">Finished</option>
+            <option value="won">Won</option>
+            <option value="lost">Lost</option>
+          </select>
+        </label>
+        <span class="shown" id="pShown"></span>
+      </div>
+      <div class="plist" id="pList"></div>
+      <div class="empty" id="pEmpty"></div>
     </div>
 
     <details class="explain">

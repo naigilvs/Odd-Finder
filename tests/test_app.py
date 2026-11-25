@@ -1,6 +1,7 @@
 """Tests for the odds valuation in app.py. Run: ./run_tests.sh (no internet or API key needed)."""
 import json
 import sys
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -142,6 +143,8 @@ class Server(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         app.DEMO, app.API_KEY = True, None
+        cls.tmp = tempfile.TemporaryDirectory()
+        app.PICKS = app.picks.PickStore(Path(cls.tmp.name) / "picks.json")   # never touch real picks
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -149,6 +152,29 @@ class Server(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.tmp.cleanup()
+
+    def post(self, path, body):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.load(r)
+        except urllib.error.HTTPError as e:
+            return e.code, json.load(e)
+
+    def test_saving_picks(self):
+        bet = {"event_id": "e9", "sport_key": "basketball_nba", "sport": "NBA", "event": "A @ H", "home_team": "H",
+               "away_team": "A", "start": FUTURE, "market": "h2h", "market_label": "Moneyline", "selection": "H",
+               "outcome": "H", "american": "+110", "decimal": 2.1}
+        status, body = self.post("/api/picks", {"action": "save", "pick": bet, "stake": 20})
+        self.assertEqual(status, 200)
+        pid = body["pick"]["id"]
+        self.assertEqual(len(self.post("/api/picks", {"action": "list"})[1]["picks"]), 1)
+        self.assertEqual(self.post("/api/picks", {"action": "update", "id": pid, "status": "won"})[1]["picks"][0]["status"], "won")
+        self.assertEqual(self.post("/api/picks", {"action": "update", "id": "nope", "status": "won"})[0], 400)
+        self.assertEqual(self.post("/api/picks", {"action": "save", "pick": {"selection": "x"}})[0], 400)
+        self.assertEqual(self.post("/api/picks", {"action": "delete", "id": pid})[1]["picks"], [])
 
     def get(self, path):
         try:
