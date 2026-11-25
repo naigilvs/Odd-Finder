@@ -1,4 +1,4 @@
-# Value Finder
+# Odd Finder
 
 Scans every bet a sportsbook (FanDuel for now) offers, estimates each one's real chance of winning, and ranks them by **expected value**: how much the odds pay relative to that chance.
 
@@ -20,7 +20,7 @@ Bet types: moneyline, point spread, totals (over/under) and, if you turn them on
    python3 app.py
    ```
 
-4. Open http://localhost:8765, pick the sports and press **Scan odds**.
+4. Open http://localhost:8765, choose your sportsbook, pick a sport tab and press **Scan**.
 
 To try it without a key, run `python3 app.py --demo`. It uses made-up teams and odds.
 

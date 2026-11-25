@@ -33,6 +33,8 @@ API_BASE = "https://api.the-odds-api.com/v4"
 
 # Sportsbooks the user can analyze. Add more here later, e.g. "draftkings": "DraftKings".
 TARGET_BOOKS = {"fanduel": "FanDuel"}
+# Shown on the start screen as not yet available.
+COMING_SOON_BOOKS = ["DraftKings", "BetMGM", "Caesars", "Fanatics"]
 
 # Books used to build the "fair probability" consensus. The Odds API bills every
 # 10 bookmakers as one region, so this list (plus the target book) costs 1 region.
@@ -243,6 +245,7 @@ def analyze_event(event, target, min_books):
             price = o["price"]
             rows.append({
                 "event_id": event["id"],
+                "sport_key": event.get("sport_key"),
                 "sport": event.get("sport_title", event.get("sport_key")),
                 "event": f"{event.get('away_team')} @ {home}" if home else event.get("sport_title"),
                 "start": event["commence_time"],
@@ -292,9 +295,13 @@ def run_scan(target, sports, include_props, min_books):
 
 DEMO_SPORTS = [
     ("basketball_nba", "NBA", "Basketball"),
+    ("basketball_ncaab", "NCAAB", "Basketball"),
     ("americanfootball_nfl", "NFL", "American Football"),
+    ("americanfootball_ncaaf", "NCAAF", "American Football"),
     ("icehockey_nhl", "NHL", "Ice Hockey"),
     ("soccer_epl", "EPL", "Soccer"),
+    ("soccer_uefa_champs_league", "UEFA Champions League", "Soccer"),
+    ("mma_mixed_martial_arts", "MMA", "Mixed Martial Arts"),
 ]
 DEMO_TEAMS = ["Harbor Hawks", "Ridge Rams", "Metro Comets", "Valley Vipers", "Coast Cougars",
               "Summit Owls", "River Foxes", "Prairie Bison", "Canyon Kings", "Lake Lynx"]
@@ -378,8 +385,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif url.path.startswith("/static/") and url.path.count("/") == 2:
+                f = ROOT / "static" / url.path.split("/")[-1]
+                types = {".svg": "image/svg+xml", ".png": "image/png", ".css": "text/css", ".js": "text/javascript"}
+                if f.suffix not in types or not f.is_file():
+                    return self.send_json({"error": "Not found"}, 404)
+                body = f.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", types[f.suffix])
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             elif url.path == "/api/config":
                 self.send_json({"books": [{"key": k, "name": v} for k, v in TARGET_BOOKS.items()],
+                                "coming_soon": COMING_SOON_BOOKS,
                                 "demo": DEMO, "has_key": bool(API_KEY), "quota": _quota,
                                 "prop_sports": list(PROP_MARKETS)})
             elif url.path == "/api/sports":

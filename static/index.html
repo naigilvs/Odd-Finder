@@ -3,227 +3,503 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Value Finder</title>
+<title>Odd Finder</title>
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0f1216; --panel: #171b21; --line: #262c35; --text: #e6e9ee; --muted: #8b94a3;
-    --accent: #4fb3ff; --good: #3ecf8e; --bad: #ef6b6b; --warn: #f2b84b;
+    --ink: #0D2235;        /* stadium-night navy */
+    --panel: #132D45;
+    --panel-2: #183754;
+    --line: #23466A;
+    --chalk: #EEF2EA;      /* text */
+    --slate: #8FA3B8;      /* secondary text */
+    --amber: #FFC233;      /* floodlight: value score */
+    --turf: #3DBE7A;       /* positive */
+    --flag: #F0635A;       /* negative */
+    --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+    --body: "Barlow", -apple-system, "Segoe UI", sans-serif;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-         background: var(--bg); color: var(--text); }
-  header { padding: 18px 24px 8px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
-  h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
-  .sub { color: var(--muted); }
-  .demo { background: var(--warn); color: #1a1200; font-weight: 600; padding: 6px 24px; }
-  main { padding: 8px 24px 40px; }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
-  .row { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-end; }
-  label.f { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
-  select, input[type=number] { background: var(--bg); color: var(--text); border: 1px solid var(--line);
-         border-radius: 6px; padding: 6px 8px; font: inherit; min-width: 110px; }
-  button { background: var(--accent); color: #04121f; border: 0; border-radius: 6px; padding: 8px 16px;
-           font: inherit; font-weight: 600; cursor: pointer; }
-  button.ghost { background: transparent; color: var(--accent); padding: 2px 6px; font-weight: 500; }
-  button:disabled { opacity: .5; cursor: wait; }
-  .sports { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; max-height: 150px; overflow: auto; }
-  .sports label { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
-  .group-title { width: 100%; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; margin-top: 4px; }
-  .status { color: var(--muted); margin: 8px 0; min-height: 20px; }
-  .status.err { color: var(--bad); }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-  th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--panel); cursor: pointer; user-select: none; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .pos { color: var(--good); font-weight: 600; } .neg { color: var(--bad); }
-  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
-  .tag.sharp { border-color: var(--good); color: var(--good); }
-  .small { font-size: 12px; color: var(--muted); }
-  .sel { font-weight: 600; }
-  .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 4px; width: 80px; margin-left: auto; }
-  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
-  details { color: var(--muted); }
-  details p { margin: 6px 0; }
-  footer { color: var(--muted); font-size: 12px; padding: 0 24px 24px; }
+  html, body { margin: 0; }
+  body {
+    background: var(--ink); color: var(--chalk);
+    font: 16px/1.5 var(--body);
+    /* faint pitch lines */
+    background-image:
+      linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+    background-size: 64px 64px;
+    min-height: 100vh;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 4px; }
+  [hidden] { display: none !important; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+  .muted { color: var(--slate); }
+  .num { font-family: var(--display); font-variant-numeric: tabular-nums; letter-spacing: .2px; }
+
+  /* ---------- wordmark ---------- */
+  .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
+  .brand img { width: 34px; height: 34px; }
+  .brand span { font: 700 26px/1 var(--display); letter-spacing: .3px; }
+
+  /* ---------- start screen ---------- */
+  #start { min-height: 100vh; display: grid; place-items: center; padding: 48px 24px; }
+  .start-inner { max-width: 760px; width: 100%; }
+  .start-inner .brand img { width: 52px; height: 52px; }
+  .start-inner .brand span { font-size: 38px; }
+  .start-inner h1 {
+    font: 700 clamp(44px, 7vw, 76px)/.95 var(--display);
+    margin: 40px 0 18px; letter-spacing: -.5px; max-width: 14ch;
+  }
+  .start-inner .lede { font-size: 19px; color: var(--slate); max-width: 56ch; margin: 0 0 44px; }
+  .start-inner h2 { font: 600 22px/1.2 var(--display); margin: 0 0 14px; }
+  .books { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }
+  .ticket {
+    position: relative; text-align: left; padding: 20px 22px; border: 0; cursor: pointer;
+    background: var(--panel-2); border-radius: 10px;
+    /* ticket notches on both sides */
+    -webkit-mask: radial-gradient(circle 10px at 0 50%, #0000 98%, #000) left / 51% 100% no-repeat,
+                  radial-gradient(circle 10px at 100% 50%, #0000 98%, #000) right / 51% 100% no-repeat;
+            mask: radial-gradient(circle 10px at 0 50%, #0000 98%, #000) left / 51% 100% no-repeat,
+                  radial-gradient(circle 10px at 100% 50%, #0000 98%, #000) right / 51% 100% no-repeat;
+    transition: background .15s, transform .15s;
+  }
+  .ticket b { display: block; font: 700 28px/1.1 var(--display); }
+  .ticket small { display: block; margin-top: 6px; color: var(--slate); font-size: 14px; }
+  .ticket.live { background: var(--amber); color: var(--ink); }
+  .ticket.live small { color: #5a4300; }
+  .ticket.live:hover { transform: translateY(-2px); }
+  .ticket:disabled { cursor: not-allowed; opacity: .55; }
+  .start-note { margin-top: 28px; font-size: 14px; color: var(--slate); }
+
+  /* ---------- app header ---------- */
+  header.top { border-bottom: 1px solid var(--line); background: rgba(13,34,53,.92); position: sticky; top: 0; z-index: 5; backdrop-filter: blur(6px); }
+  header.top .wrap { display: flex; align-items: center; gap: 18px; height: 64px; }
+  .bookchip { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+  .bookchip strong { font: 600 18px var(--display); padding: 4px 12px; border-radius: 999px; background: var(--panel-2); }
+  .linkbtn { background: none; border: 0; color: var(--amber); cursor: pointer; padding: 4px; font-size: 14px; }
+  .credits { font-size: 14px; color: var(--slate); }
+  .demo-bar { background: var(--amber); color: var(--ink); font-weight: 600; font-size: 14px; }
+  .demo-bar .wrap { padding-top: 7px; padding-bottom: 7px; }
+
+  /* ---------- sport tabs ---------- */
+  nav.tabs { display: flex; gap: 4px; overflow-x: auto; padding-top: 22px; border-bottom: 1px solid var(--line); scrollbar-width: none; }
+  nav.tabs button {
+    display: flex; align-items: center; gap: 8px; white-space: nowrap;
+    background: none; border: 0; border-bottom: 3px solid transparent; cursor: pointer;
+    padding: 10px 14px 12px; font: 600 19px var(--display); color: var(--slate);
+  }
+  nav.tabs button:hover { color: var(--chalk); }
+  nav.tabs button[aria-selected="true"] { color: var(--chalk); border-bottom-color: var(--amber); }
+  nav.tabs .ico { font-size: 20px; line-height: 1; }
+  nav.tabs .count { font: 500 13px var(--body); background: var(--panel-2); color: var(--slate); border-radius: 999px; padding: 1px 8px; }
+
+  /* ---------- scan bar ---------- */
+  .scanbar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 20px 0 6px; }
+  .leagues { display: flex; flex-wrap: wrap; gap: 8px; flex: 1 1 420px; }
+  .chip { position: relative; }
+  .chip input { position: absolute; opacity: 0; pointer-events: none; }
+  .chip span { display: inline-block; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line); font-size: 14px; color: var(--slate); cursor: pointer; user-select: none; }
+  .chip input:checked + span { background: var(--chalk); border-color: var(--chalk); color: var(--ink); font-weight: 600; }
+  .chip input:focus-visible + span { outline: 2px solid var(--amber); outline-offset: 2px; }
+  .scan-actions { display: flex; align-items: center; gap: 16px; }
+  .toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--slate); cursor: pointer; }
+  .toggle input { accent-color: var(--amber); width: 16px; height: 16px; }
+  .btn-scan {
+    background: var(--amber); color: var(--ink); border: 0; border-radius: 8px; cursor: pointer;
+    padding: 10px 20px; font: 700 19px var(--display); letter-spacing: .3px; white-space: nowrap;
+  }
+  .btn-scan small { font: 500 13px var(--body); opacity: .75; margin-left: 6px; }
+  .btn-scan:disabled { opacity: .6; cursor: progress; }
+  .status { min-height: 24px; font-size: 14px; color: var(--slate); padding: 4px 0 10px; }
+  .status.err { color: var(--flag); }
+
+  /* ---------- top pick ---------- */
+  .toppick {
+    display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center;
+    background: var(--panel); border: 1px solid var(--line); border-left: 6px solid var(--amber);
+    border-radius: 12px; padding: 24px 28px; margin: 6px 0 22px;
+  }
+  .toppick .label { font-size: 14px; color: var(--amber); font-weight: 600; }
+  .toppick h3 { font: 700 clamp(30px, 4vw, 42px)/1 var(--display); margin: 6px 0 8px; }
+  .toppick .event { color: var(--slate); }
+  .toppick .facts { display: flex; gap: 28px; margin-top: 16px; flex-wrap: wrap; }
+  .toppick .facts div { font-size: 13px; color: var(--slate); }
+  .toppick .facts b { display: block; font: 600 24px var(--display); color: var(--chalk); }
+  .plate {
+    background: var(--amber); color: var(--ink); border-radius: 8px; text-align: center;
+    padding: 10px 16px 8px; min-width: 132px;
+  }
+  .plate b { display: block; font: 700 54px/1 var(--display); font-variant-numeric: tabular-nums; }
+  .plate small { font-size: 13px; font-weight: 600; }
+
+  /* ---------- filters ---------- */
+  .filters { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: end; padding-bottom: 14px; }
+  .filters label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--slate); }
+  .filters select, .filters input {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; min-width: 130px; color: var(--chalk);
+  }
+  .filters input { width: 110px; min-width: 0; }
+  .filters .shown { margin-left: auto; font-size: 14px; color: var(--slate); }
+
+  /* ---------- bet list ---------- */
+  .list { border-top: 1px solid var(--line); }
+  .bet {
+    display: grid; grid-template-columns: 44px minmax(0, 2.3fr) minmax(0, 1fr) 90px 150px 104px;
+    gap: 16px; align-items: center; padding: 14px 6px; border-bottom: 1px solid var(--line);
+  }
+  .bet .rank { font: 600 20px var(--display); color: var(--slate); text-align: right; }
+  .bet .what b { display: block; font-weight: 600; font-size: 17px; }
+  .bet .what span { font-size: 14px; color: var(--slate); }
+  .bet .type { font-size: 14px; color: var(--slate); }
+  .bet .type .when { display: block; }
+  .bet .odds { font: 700 24px var(--display); text-align: right; }
+  .bet .odds small { display: block; font: 400 13px var(--body); color: var(--slate); }
+  .probs { font-size: 13px; color: var(--slate); }
+  .probs .meter { position: relative; height: 6px; background: var(--panel-2); border-radius: 3px; margin: 6px 0 4px; }
+  .probs .meter i { position: absolute; inset: 0 auto 0 0; background: var(--chalk); border-radius: 3px; }
+  .probs .meter em { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--flag); }
+  .probs b { color: var(--chalk); font-weight: 600; }
+  .ev { border-radius: 6px; text-align: center; padding: 6px 4px 5px; font: 700 24px/1 var(--display); font-variant-numeric: tabular-nums; }
+  .ev small { display: block; font: 500 11px var(--body); margin-top: 3px; }
+  .ev.pos { background: var(--amber); color: var(--ink); }
+  .ev.neg { background: var(--panel-2); color: var(--slate); }
+  .tag-sharp { font-size: 12px; color: var(--turf); }
+
+  .empty { text-align: center; padding: 70px 20px 80px; color: var(--slate); }
+  .empty .big { font-size: 46px; }
+  .empty h3 { font: 600 28px var(--display); color: var(--chalk); margin: 10px 0 6px; }
+
+  /* ---------- explainer + footer ---------- */
+  .explain { margin: 40px 0 0; background: var(--panel); border-radius: 12px; padding: 4px 24px; }
+  .explain summary { cursor: pointer; padding: 16px 0; font: 600 21px var(--display); }
+  .explain .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px; padding-bottom: 22px; }
+  .explain h4 { font: 600 18px var(--display); margin: 0 0 4px; color: var(--amber); }
+  .explain p { margin: 0; color: var(--slate); font-size: 15px; max-width: 60ch; }
+  footer { padding: 30px 0 48px; font-size: 13px; color: var(--slate); }
+
+  @media (max-width: 860px) {
+    .bet { grid-template-columns: 34px 1fr auto; grid-template-areas: "rank what ev" "rank odds probs"; row-gap: 8px; }
+    .bet .rank { grid-area: rank; align-self: start; }
+    .bet .what { grid-area: what; }
+    .bet .type { display: none; }
+    .bet .odds { grid-area: odds; text-align: left; }
+    .bet .probs { grid-area: probs; min-width: 130px; }
+    .bet .ev { grid-area: ev; min-width: 82px; }
+    .toppick { grid-template-columns: 1fr; }
+    .bookchip .credits, .linkbtn .wide { display: none; }
+    header.top .wrap { gap: 10px; }
+  }
+  .brand span, .linkbtn { white-space: nowrap; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .toppick.fresh { animation: rise .35s ease-out; }
 </style>
 </head>
 <body>
-<div id="demoBanner" class="demo" hidden>DEMO MODE: made-up teams and odds. Add an API key to see real FanDuel lines (see README.md).</div>
-<header>
-  <h1>Value Finder</h1>
-  <span class="sub">Ranks every bet by how well the sportsbook's odds pay compared with its estimated chance of winning</span>
-</header>
-<main>
-  <div class="panel">
-    <div class="row">
-      <label class="f">Sportsbook
-        <select id="book"></select>
-      </label>
-      <label class="f">Min. books in consensus
-        <input id="minBooks" type="number" min="1" max="9" value="3">
-      </label>
-      <label class="f" style="flex-direction:row;align-items:center;gap:6px;color:var(--text)">
-        <input id="props" type="checkbox"> Include player props <span class="small">(uses many more API credits)</span>
-      </label>
-      <button id="scan">Scan odds</button>
-      <span id="quota" class="small"></span>
-    </div>
-    <div class="small" style="margin-top:12px">
-      Sports <button class="ghost" id="all">select all</button><button class="ghost" id="none">clear</button>
-    </div>
-    <div id="sports" class="sports"><span class="small">Loading sports…</span></div>
-  </div>
 
-  <div class="panel">
-    <div class="row">
-      <label class="f">Bet type
-        <select id="fMarket"><option value="">All</option></select>
-      </label>
-      <label class="f">Sport
-        <select id="fSport"><option value="">All</option></select>
-      </label>
-      <label class="f">Min. win probability %
-        <input id="fProb" type="number" min="0" max="100" value="0">
-      </label>
-      <label class="f">Min. expected value %
-        <input id="fEv" type="number" step="0.5" value="-100">
-      </label>
-      <label class="f">Sort by
-        <select id="sort">
-          <option value="ev">Expected value</option>
-          <option value="fair_prob">Win probability</option>
-          <option value="edge">Probability edge</option>
-          <option value="start">Start time</option>
-        </select>
-      </label>
-    </div>
-    <div id="status" class="status">Pick sports and press <b>Scan odds</b>.</div>
-    <div style="overflow:auto;max-height:70vh">
-      <table id="tbl" hidden>
-        <thead><tr>
-          <th>#</th><th>Bet</th><th>Event</th><th>Type</th>
-          <th class="num" data-k="decimal">Odds</th>
-          <th class="num" data-k="book_prob">Book's implied %</th>
-          <th class="num" data-k="fair_prob">Est. win %</th>
-          <th class="num" data-k="ev">Expected value</th>
-          <th>Based on</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
+<!-- ================= start screen ================= -->
+<section id="start" hidden>
+  <div class="start-inner">
+    <div class="brand"><img src="/static/logo.svg" alt=""><span>Odd Finder</span></div>
+    <h1>Find the bets your sportsbook priced too generously</h1>
+    <p class="lede">Odd Finder checks every line on your sportsbook against the rest of the betting market and ranks the bets that pay more than their real chance of winning.</p>
+    <h2>Choose your sportsbook</h2>
+    <div class="books" id="bookList"></div>
+    <p class="start-note" id="startNote"></p>
   </div>
+</section>
 
-  <details class="panel">
-    <summary>How the ranking works</summary>
-    <p><b>Est. win %</b>: every other sportsbook's price for the same line, with its built-in margin (the vig) removed, averaged together. Low-margin books such as Pinnacle count more. This consensus is usually a better estimate of the real chance than any single book.</p>
-    <p><b>Book's implied %</b>: the chance the chosen sportsbook's odds imply (1 ÷ decimal odds), margin included.</p>
-    <p><b>Expected value</b>: est. win % × decimal odds − 1. +3% means that, if the estimate is right, the bet returns $3 per $100 on average over many bets. Most bets show a negative number because of the margin; positive ones are where the book is out of line with the market.</p>
-    <p>A high win probability alone is not a good bet. A 90% favorite at odds that imply 95% loses money over time. That's why the list is ranked by expected value, and you can filter by win probability.</p>
-  </details>
-</main>
-<footer>
-  Estimates only: no bet is guaranteed and odds change constantly. Check the line in the app before you bet.
-  Only bet what you can afford to lose. If gambling stops being fun, call or text 1-800-GAMBLER.
-</footer>
+<!-- ================= main app ================= -->
+<div id="app" hidden>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="#" id="home"><img src="/static/logo.svg" alt=""><span>Odd Finder</span></a>
+      <div class="bookchip">
+        <span class="credits" id="credits"></span>
+        <strong id="bookName"></strong>
+        <button class="linkbtn" id="changeBook">Change<span class="wide"> sportsbook</span></button>
+      </div>
+    </div>
+  </header>
+  <div class="demo-bar" id="demoBar" hidden><div class="wrap">Demo mode: these teams and odds are made up. Add your API key to config.json to see real lines.</div></div>
+
+  <main class="wrap">
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Sports"></nav>
+
+    <div class="scanbar">
+      <div class="leagues" id="leagues" aria-label="Leagues to scan"></div>
+      <div class="scan-actions">
+        <label class="toggle"><input type="checkbox" id="props"> Player props</label>
+        <button class="btn-scan" id="scan">Scan odds</button>
+      </div>
+    </div>
+    <div class="status" id="status" role="status"></div>
+
+    <section id="results">
+      <div class="toppick" id="toppick" hidden></div>
+
+      <div class="filters" id="filters" hidden>
+        <label>Bet type<select id="fMarket"></select></label>
+        <label>Min. win chance %<input id="fProb" type="number" min="0" max="100" value="0"></label>
+        <label>Min. value %<input id="fEv" type="number" step="0.5" value="-100"></label>
+        <label>Sort by
+          <select id="sort">
+            <option value="ev">Best value</option>
+            <option value="fair_prob">Most likely to win</option>
+            <option value="start">Starting soonest</option>
+          </select>
+        </label>
+        <label>Books needed<input id="minBooks" type="number" min="1" max="9" value="3" title="Only show bets at least this many other sportsbooks also offer"></label>
+        <span class="shown" id="shown"></span>
+      </div>
+
+      <div class="list" id="list"></div>
+      <div class="empty" id="empty"></div>
+    </section>
+
+    <details class="explain">
+      <summary>How Odd Finder ranks bets</summary>
+      <div class="cols">
+        <div><h4>Win chance</h4><p>For each bet, Odd Finder looks up the same line at up to 9 other sportsbooks, strips out each book's built-in margin, and averages them. Sharp books like Pinnacle count extra because their prices are the most accurate.</p></div>
+        <div><h4>Book's price</h4><p>The chance your sportsbook's odds imply, margin included. On each bet, the red tick on the bar marks it. When the bar runs past the tick, the bet's real chance is higher than the price suggests.</p></div>
+        <div><h4>Value</h4><p>Win chance × decimal odds − 1. A value of +5% means the bet returns about $5 per $100 on average over many bets like it. Most bets land below zero because of the margin.</p></div>
+      </div>
+    </details>
+    <footer>Estimates only. No bet is guaranteed, and odds change constantly, so check the line in your sportsbook before you bet. Only bet what you can afford to lose. If gambling stops being fun, call or text 1-800-GAMBLER.</footer>
+  </main>
+</div>
 
 <script>
 const $ = s => document.querySelector(s);
-let rows = [];
-
-const pct = (x, d = 1) => (x * 100).toFixed(d) + '%';
-const fmtTime = iso => new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const pct = (x, d = 1) => (x * 100).toFixed(d) + '%';
+const signed = (x, d = 1) => (x > 0 ? '+' : '') + (x * 100).toFixed(d) + '%';
+const when = iso => new Date(iso).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
+
+const ICONS = { 'American Football': '🏈', 'Basketball': '🏀', 'Baseball': '⚾', 'Ice Hockey': '🏒', 'Soccer': '⚽',
+  'Tennis': '🎾', 'Mixed Martial Arts': '🥊', 'Boxing': '🥊', 'Golf': '⛳', 'Cricket': '🏏', 'Rugby League': '🏉',
+  'Rugby Union': '🏉', 'Aussie Rules': '🏉', 'Lacrosse': '🥍', 'Handball': '🤾', 'Politics': '🗳️' };
+const TAB_NAMES = { 'American Football': 'Football', 'Ice Hockey': 'Hockey', 'Mixed Martial Arts': 'MMA' };
+const TAB_ORDER = ['American Football', 'Basketball', 'Ice Hockey', 'Baseball', 'Soccer', 'Mixed Martial Arts', 'Boxing', 'Tennis', 'Golf'];
+const POPULAR = ['americanfootball_nfl', 'americanfootball_ncaaf', 'basketball_nba', 'basketball_ncaab', 'icehockey_nhl', 'baseball_mlb'];
+const CREDITS_PER_LEAGUE = 3;
+
+const state = {
+  cfg: null, book: null, sports: [], groupOf: {}, tab: 'all',
+  picked: new Set(),          // leagues ticked for scanning
+  results: {},                // sport_key -> { rows, at }
+};
 
 async function getJSON(url) {
   const r = await fetch(url);
-  const j = await r.json();
+  const j = await r.json().catch(() => ({ error: r.statusText }));
   if (!r.ok || j.error) throw new Error(j.error || r.statusText);
   return j;
 }
 
-function showQuota(q) {
-  if (q && q.remaining != null) $('#quota').textContent = `API credits left this month: ${q.remaining}`;
+/* ---------------- start screen ---------------- */
+function showStart() {
+  $('#app').hidden = true;
+  $('#start').hidden = false;
+  const live = state.cfg.books.map(b =>
+    `<button class="ticket live" data-book="${b.key}"><b>${esc(b.name)}</b><small>Ready to scan</small></button>`);
+  const soon = state.cfg.coming_soon.map(n =>
+    `<button class="ticket" disabled><b>${esc(n)}</b><small>Coming soon</small></button>`);
+  $('#bookList').innerHTML = live.concat(soon).join('');
+  $('#startNote').textContent = state.cfg.demo ? 'You’re in demo mode, so odds are made up until you add an API key.' : '';
+  document.querySelectorAll('.ticket.live').forEach(b => b.onclick = () => pickBook(b.dataset.book));
 }
 
-async function init() {
-  const cfg = await getJSON('/api/config');
-  $('#demoBanner').hidden = !cfg.demo;
-  $('#book').innerHTML = cfg.books.map(b => `<option value="${b.key}">${esc(b.name)}</option>`).join('');
-  showQuota(cfg.quota);
-  try {
-    const sports = await getJSON('/api/sports');
-    const groups = {};
-    sports.forEach(s => (groups[s.group] = groups[s.group] || []).push(s));
-    const popular = ['americanfootball_nfl', 'basketball_nba', 'icehockey_nhl', 'baseball_mlb', 'americanfootball_ncaaf', 'basketball_ncaab'];
-    $('#sports').innerHTML = Object.keys(groups).sort().map(g =>
-      `<div class="group-title">${esc(g)}</div>` + groups[g].map(s =>
-        `<label><input type="checkbox" value="${s.key}" ${cfg.demo || popular.includes(s.key) ? 'checked' : ''}> ${esc(s.title)}</label>`
-      ).join('')).join('');
-  } catch (e) {
-    $('#sports').innerHTML = `<span class="status err">${esc(e.message)}</span>`;
-  }
+function pickBook(key) {
+  state.book = state.cfg.books.find(b => b.key === key);
+  localStorage.setItem('oddfinder.book', key);
+  state.results = JSON.parse(localStorage.getItem(storeKey()) || '{}');
+  $('#start').hidden = true;
+  $('#app').hidden = false;
+  $('#bookName').textContent = state.book.name;
+  $('#demoBar').hidden = !state.cfg.demo;
+  renderAll();
 }
 
+const storeKey = () => `oddfinder.results.${state.cfg.demo ? 'demo.' : ''}${state.book.key}`;
+
+/* ---------------- tabs + leagues ---------------- */
+function groups() {
+  const gs = [...new Set(state.sports.map(s => s.group))];
+  return gs.sort((a, b) => (TAB_ORDER.indexOf(a) + 1 || 99) - (TAB_ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
+}
+const leaguesInTab = () => state.sports.filter(s => state.tab === 'all' || s.group === state.tab);
+const rowsInTab = () => Object.entries(state.results)
+  .filter(([k]) => state.tab === 'all' || state.groupOf[k] === state.tab)
+  .flatMap(([, v]) => v.rows);
+
+function renderTabs() {
+  const count = g => Object.entries(state.results).filter(([k]) => g === 'all' || state.groupOf[k] === g)
+    .reduce((n, [, v]) => n + v.rows.filter(r => r.ev > 0).length, 0);
+  const tab = (g, label, ico) => {
+    const c = count(g);
+    return `<button role="tab" data-g="${esc(g)}" aria-selected="${state.tab === g}">
+      <span class="ico" aria-hidden="true">${ico}</span>${esc(label)}${c ? `<span class="count" title="Bets with positive value">${c}</span>` : ''}</button>`;
+  };
+  $('#tabs').innerHTML = tab('all', 'All sports', '🏟️') + groups().map(g => tab(g, TAB_NAMES[g] || g, ICONS[g] || '🏟️')).join('');
+  document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => { state.tab = b.dataset.g; renderAll(); });
+}
+
+function renderLeagues() {
+  $('#leagues').innerHTML = leaguesInTab().map(s => `
+    <label class="chip"><input type="checkbox" value="${s.key}" ${state.picked.has(s.key) ? 'checked' : ''}><span>${esc(s.title)}</span></label>`).join('');
+  document.querySelectorAll('#leagues input').forEach(i => i.onchange = () => {
+    i.checked ? state.picked.add(i.value) : state.picked.delete(i.value);
+    renderScanButton();
+  });
+  renderScanButton();
+}
+
+function scanTargets() { return leaguesInTab().map(s => s.key).filter(k => state.picked.has(k)); }
+
+function renderScanButton() {
+  const n = scanTargets().length;
+  const cost = state.cfg.demo ? '' : `<small>about ${n * CREDITS_PER_LEAGUE}${$('#props').checked ? '+' : ''} credits</small>`;
+  $('#scan').innerHTML = n ? `Scan ${n} league${n > 1 ? 's' : ''}${cost}` : 'Pick a league';
+  $('#scan').disabled = !n;
+}
+
+/* ---------------- scanning ---------------- */
 async function scan() {
-  const sports = [...document.querySelectorAll('#sports input:checked')].map(i => i.value);
-  if (!sports.length) return setStatus('Pick at least one sport.', true);
+  const sports = scanTargets();
+  if (!sports.length) return;
   $('#scan').disabled = true;
-  setStatus(`Scanning ${sports.length} sport${sports.length > 1 ? 's' : ''}…`);
+  setStatus(`Checking ${state.book.name}'s odds against the market…`);
   try {
-    const p = new URLSearchParams({ book: $('#book').value, sports: sports.join(','),
-      props: $('#props').checked ? 1 : 0, min_books: $('#minBooks').value });
+    const p = new URLSearchParams({ book: state.book.key, sports: sports.join(','),
+      props: $('#props').checked ? 1 : 0, min_books: 1 });
     const res = await getJSON('/api/scan?' + p);
-    rows = res.rows;
-    showQuota(res.quota);
-    fillFilters();
-    render();
-    const errs = res.errors.length ? ` Some sports failed: ${res.errors.join('; ')}` : '';
-    setStatus(`${res.count} ${res.book} bets analyzed at ${new Date(res.generated).toLocaleTimeString()}.${errs}`, !!res.errors.length && !res.count);
+    const at = Date.now();
+    sports.forEach(k => state.results[k] = { rows: [], at });
+    res.rows.forEach(r => (state.results[r.sport_key] ||= { rows: [], at }).rows.push(r));
+    try { localStorage.setItem(storeKey(), JSON.stringify(state.results)); } catch (e) { /* storage full: keep in memory */ }
+    showCredits(res.quota);
+    renderAll(true);
+    if (res.errors.length) setStatus(`Some leagues couldn't be loaded: ${res.errors.join('; ')}`, true);
   } catch (e) {
     setStatus(e.message, true);
   } finally {
-    $('#scan').disabled = false;
+    renderScanButton();
   }
 }
 
-function setStatus(msg, err) { const s = $('#status'); s.textContent = msg; s.className = 'status' + (err ? ' err' : ''); }
+function setStatus(msg, err) { $('#status').textContent = msg; $('#status').className = 'status' + (err ? ' err' : ''); }
+function showCredits(q) { if (q && q.remaining != null) $('#credits').textContent = `${q.remaining} API credits left`; }
 
-function fillFilters() {
-  const opts = (sel, vals) => {
-    const cur = sel.value;
-    sel.innerHTML = '<option value="">All</option>' + [...new Set(vals)].sort().map(v => `<option>${esc(v)}</option>`).join('');
-    sel.value = [...sel.options].some(o => o.value === cur) ? cur : '';
-  };
-  opts($('#fMarket'), rows.map(r => r.market_label));
-  opts($('#fSport'), rows.map(r => r.sport));
+/* ---------------- results ---------------- */
+function filtered() {
+  const m = $('#fMarket').value, minP = +$('#fProb').value / 100, minEv = +$('#fEv').value / 100;
+  const minBooks = +$('#minBooks').value || 1, key = $('#sort').value;
+  return rowsInTab()
+    .filter(r => (!m || r.market_label === m) && r.fair_prob >= minP && r.ev >= minEv && r.books_used.length >= minBooks)
+    .sort((a, b) => key === 'start' ? a.start.localeCompare(b.start) : b[key] - a[key]);
 }
 
-function render() {
-  const m = $('#fMarket').value, sp = $('#fSport').value;
-  const minP = +$('#fProb').value / 100, minEv = +$('#fEv').value / 100, key = $('#sort').value;
-  const list = rows.filter(r => (!m || r.market_label === m) && (!sp || r.sport === sp) && r.fair_prob >= minP && r.ev >= minEv);
-  list.sort((a, b) => key === 'start' ? a.start.localeCompare(b.start) : b[key] - a[key]);
-  $('#tbl').hidden = !rows.length;
-  $('#tbl tbody').innerHTML = list.slice(0, 500).map((r, i) => `
-    <tr>
-      <td class="small">${i + 1}</td>
-      <td><div class="sel">${esc(r.selection)}</div></td>
-      <td>${esc(r.event)}<div class="small">${esc(r.sport)} · ${fmtTime(r.start)}</div></td>
-      <td>${esc(r.market_label)}</td>
-      <td class="num"><b>${r.american}</b><div class="small">${r.decimal.toFixed(2)}</div></td>
-      <td class="num">${pct(r.book_prob)}</td>
-      <td class="num">${pct(r.fair_prob)}<div class="bar"><i style="width:${(r.fair_prob * 100).toFixed(0)}%"></i></div></td>
-      <td class="num ${r.ev > 0 ? 'pos' : 'neg'}">${r.ev > 0 ? '+' : ''}${pct(r.ev, 2)}</td>
-      <td><span class="tag ${r.sharp ? 'sharp' : ''}" title="${esc(r.books_used.join(', '))}">${r.books_used.length} books${r.sharp ? ' · sharp' : ''}</span></td>
-    </tr>`).join('');
-  if (rows.length && !list.length) setStatus('No bets match these filters.');
+function renderResults(fresh) {
+  const all = rowsInTab();
+  const markets = [...new Set(all.map(r => r.market_label))].sort();
+  const cur = $('#fMarket').value;
+  $('#fMarket').innerHTML = '<option value="">All bet types</option>' + markets.map(m => `<option>${esc(m)}</option>`).join('');
+  $('#fMarket').value = markets.includes(cur) ? cur : '';
+
+  const scannedHere = Object.keys(state.results).filter(k => state.tab === 'all' || state.groupOf[k] === state.tab);
+  const list = filtered();
+  $('#filters').hidden = !all.length;
+
+  if (!scannedHere.length) {
+    const tabName = state.tab === 'all' ? 'any sport' : (TAB_NAMES[state.tab] || state.tab);
+    $('#empty').innerHTML = `<div class="big" aria-hidden="true">${state.tab === 'all' ? '🏟️' : ICONS[state.tab] || '🏟️'}</div>
+      <h3>No odds loaded for ${esc(tabName)} yet</h3><p>Pick the leagues above and press Scan to load ${esc(state.book.name)}'s lines.</p>`;
+  } else if (!list.length) {
+    $('#empty').innerHTML = all.length
+      ? `<h3>No bets match these filters</h3><p>Lower the minimum win chance or value to see more.</p>`
+      : `<h3>No upcoming games found</h3><p>${esc(state.book.name)} has no lines for these leagues right now, or not enough other books offer them to compare.</p>`;
+  } else {
+    $('#empty').innerHTML = '';
+  }
+  $('#empty').hidden = !$('#empty').innerHTML;
+
+  const latest = Math.max(0, ...scannedHere.map(k => state.results[k].at));
+  if (latest && !$('#status').classList.contains('err')) {
+    const pos = all.filter(r => r.ev > 0).length;
+    setStatus(`${all.length} bets checked, ${pos} with positive value. Updated ${ago(latest)}.`);
+  }
+  $('#shown').textContent = list.length ? `Showing ${Math.min(list.length, 300)} of ${list.length}` : '';
+
+  const top = list[0];
+  $('#toppick').hidden = !top || top.ev <= 0 || $('#sort').value !== 'ev';
+  if (top && !$('#toppick').hidden) {
+    $('#toppick').innerHTML = `
+      <div>
+        <div class="label">Best value right now</div>
+        <h3>${esc(top.selection)}</h3>
+        <div class="event">${esc(top.event)}, ${esc(top.sport)}, ${when(top.start)}</div>
+        <div class="facts">
+          <div><b>${top.american}</b>${esc(state.book.name)} odds</div>
+          <div><b>${pct(top.fair_prob)}</b>estimated win chance</div>
+          <div><b>${pct(top.book_prob)}</b>chance the price implies</div>
+          <div><b>${esc(top.market_label)}</b>bet type</div>
+        </div>
+      </div>
+      <div class="plate"><b>${signed(top.ev)}</b><small>value</small></div>`;
+    $('#toppick').classList.toggle('fresh', !!fresh);
+  }
+
+  $('#list').innerHTML = list.slice(0, 300).map((r, i) => `
+    <div class="bet">
+      <div class="rank">${i + 1}</div>
+      <div class="what"><b>${esc(r.selection)}</b><span>${esc(r.event)}</span></div>
+      <div class="type">${esc(r.market_label)}<span class="when">${esc(r.sport)}, ${when(r.start)}</span></div>
+      <div class="odds">${r.american}<small>${r.decimal.toFixed(2)}</small></div>
+      <div class="probs" title="Compared with ${esc(r.books_used.join(', '))}">
+        Win chance <b>${pct(r.fair_prob)}</b>
+        <div class="meter"><i style="width:${(r.fair_prob * 100).toFixed(1)}%"></i><em style="left:${(r.book_prob * 100).toFixed(1)}%"></em></div>
+        Price implies ${pct(r.book_prob)}${r.sharp ? ' <span class="tag-sharp">incl. sharp books</span>' : ''}
+      </div>
+      <div class="ev ${r.ev > 0 ? 'pos' : 'neg'}">${signed(r.ev)}<small>value</small></div>
+    </div>`).join('');
 }
 
-$('#scan').onclick = scan;
-$('#all').onclick = () => document.querySelectorAll('#sports input').forEach(i => i.checked = true);
-$('#none').onclick = () => document.querySelectorAll('#sports input').forEach(i => i.checked = false);
-['#fMarket', '#fSport', '#fProb', '#fEv', '#sort'].forEach(s => $(s).addEventListener('input', render));
-init();
+function renderAll(fresh) {
+  if (!$('#status').classList.contains('err')) setStatus('');
+  renderTabs();
+  renderLeagues();
+  renderResults(fresh);
+}
+
+/* ---------------- boot ---------------- */
+async function init() {
+  state.cfg = await getJSON('/api/config');
+  showCredits(state.cfg.quota);
+  try {
+    state.sports = await getJSON('/api/sports');
+  } catch (e) {
+    state.sports = [];
+    setStatus(e.message, true);
+  }
+  state.sports.forEach(s => state.groupOf[s.key] = s.group);
+  state.sports.forEach(s => { if (state.cfg.demo || POPULAR.includes(s.key)) state.picked.add(s.key); });
+  const saved = localStorage.getItem('oddfinder.book');
+  if (saved && state.cfg.books.some(b => b.key === saved)) pickBook(saved); else showStart();
+}
+
+$('#scan').onclick = () => { setStatus(''); scan(); };
+$('#props').onchange = renderScanButton;
+$('#changeBook').onclick = showStart;
+$('#home').onclick = e => { e.preventDefault(); state.tab = 'all'; renderAll(); };
+['#fMarket', '#fProb', '#fEv', '#sort', '#minBooks'].forEach(s => $(s).addEventListener('input', () => renderResults()));
+init().catch(e => { document.body.innerHTML = `<p style="padding:40px">Odd Finder couldn't start: ${esc(e.message)}</p>`; });
 </script>
 </body>
 </html>
