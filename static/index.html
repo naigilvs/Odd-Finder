@@ -202,7 +202,11 @@
       <p class="more-intro">Log the bets you actually placed: how much you wagered and how much you won or lost. Not settled yet? Choose Pending and set the result later. Every wager can be edited. Saved on your computer and backed up with your picks.</p>
       <form class="wform" id="wForm" novalidate>
         <label>Date<input type="date" id="wDate" required></label>
-        <label class="grow">What you bet on <span class="muted">(optional)</span><input id="wNote" maxlength="120" placeholder="e.g. Lakers -3.5" autocomplete="off"></label>
+        <div class="grow wnote">
+          <label for="wFromPick">What you bet on <span class="muted">(optional)</span></label>
+          <select id="wFromPick" aria-label="Choose a saved pick from My picks"><option value="">Type your own below, or choose from My picks</option></select>
+          <input id="wNote" maxlength="120" placeholder="e.g. Lakers -3.5" autocomplete="off" aria-label="What you bet on">
+        </div>
         <label>Amount wagered ($)<input id="wWagered" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
         <label>Result
           <select id="wResult">
@@ -212,7 +216,7 @@
             <option value="push">Push (stake returned)</option>
           </select>
         </label>
-        <label id="wWonWrap">Amount won ($)<input id="wWon" type="number" min="0.01" step="0.01" inputmode="decimal"><small>Your profit, not counting the stake</small></label>
+        <label id="wWonWrap">Amount won ($)<input id="wWon" type="number" min="0.01" step="0.01" inputmode="decimal"><small id="wWonHint">Your profit, not counting the stake</small></label>
         <div class="wbuttons">
           <button class="linkbtn" type="button" id="wCancel" hidden>Cancel</button>
           <button class="btn-scan" type="submit" id="wAdd">Add wager</button>

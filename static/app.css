@@ -440,3 +440,6 @@
   .wform.editing { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
   .pick.being-edited { background: rgba(255, 194, 51, .08); }
   #wList .pick.pending { border-left-color: var(--amber); }
+  .wform .wnote { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--slate); flex: 1 1 280px; min-width: 0; }
+  .wform .wnote select { width: 100%; }
+  .pmain .tag-pick { display: inline-block; width: auto; margin-left: 6px; font-size: 11px; font-weight: 600; color: var(--amber); border: 1px solid var(--amber); border-radius: 4px; padding: 0 6px; vertical-align: 2px; }

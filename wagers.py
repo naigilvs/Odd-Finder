@@ -51,7 +51,20 @@ def clean(data):
     except ValueError:
         raise ValueError("Enter a valid date.")
     note = str(data.get("note") or "").strip()[:120]
-    return {"date": day.isoformat(), "note": note, "wagered": wagered, "result": result, "won": won}
+    out = {"date": day.isoformat(), "note": note, "wagered": wagered, "result": result, "won": won}
+    # Optional link to a saved pick in My picks, with its odds (decimal), for reference.
+    pick_id = data.get("pick_id")
+    if pick_id:
+        if not isinstance(pick_id, str) or len(pick_id) > 40:
+            raise ValueError("That pick link isn't valid.")
+        out["pick_id"] = pick_id
+        try:
+            odds = float(data.get("decimal") or 0)
+        except (TypeError, ValueError):
+            odds = 0
+        if 1 < odds < 1000:
+            out["decimal"] = round(odds, 4)
+    return out
 
 
 def net(w):
@@ -93,6 +106,8 @@ class WagerStore:
             old = next((x for x in self.wagers if x["id"] == wid), None)
             if not old:
                 raise KeyError("That wager wasn't found.")
+            old.pop("pick_id", None)          # the edit decides whether it's still linked
+            old.pop("decimal", None)
             old.update(w)
             self._write()
             return old

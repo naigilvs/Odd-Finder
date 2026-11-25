@@ -72,6 +72,17 @@ class WagerLog(unittest.TestCase):
         self.assertEqual(got["id"], w["id"])                                                  # same entry, not a copy
         self.assertEqual(len(self.store.all()), 1)
 
+    def test_linked_to_a_saved_pick(self):
+        w = self.store.add({"date": "2026-11-25", "note": "Lakers -3.5", "wagered": 50, "result": "pending",
+                            "pick_id": "abc123", "decimal": 2.5})
+        self.assertEqual((w["pick_id"], w["decimal"]), ("abc123", 2.5))
+        with self.assertRaises(ValueError):
+            self.store.add({"wagered": 5, "result": "lost", "pick_id": {"not": "text"}})
+        self.store.update(w["id"], {"date": "2026-11-25", "note": "my own note", "wagered": 50, "result": "lost"})
+        got = self.store.all()[0]
+        self.assertNotIn("pick_id", got)                    # edited without the link: unlinked
+        self.assertNotIn("decimal", got)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -110,6 +110,10 @@
   }
 
   // ---- my wagers: what you actually bet, and won or lost
+  // Profit on a winning bet from its decimal odds: $50 at 2.50 (+150) wins $75.
+  function winFromOdds(wagered, decimal) {
+    return Math.round(wagered * (decimal - 1) * 100) / 100;
+  }
   function wagerNet(w) {
     return w.result === 'won' ? w.won : w.result === 'lost' ? -w.wagered : 0;
   }
@@ -131,7 +135,7 @@
   }
 
   const api = { MARKET_WEIGHT, chance, agrees, confidence, CONF_RANK, betLabel, americanOdds, lineGroup, bestLines,
-                pickProfit, summarize, wagerNet, wagerSummary };
+                pickProfit, summarize, winFromOdds, wagerNet, wagerSummary };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Calc = api;
 })(this);

@@ -112,3 +112,8 @@ test('my wagers: pending bets are kept out of profit and record', () => {
   assert.equal(s.atStake, 50);
   assert.equal(Calc.wagerNet(w('pending', 40)), 0);
 });
+
+test('amount won from the odds', () => {
+  assert.equal(Calc.winFromOdds(50, 2.5), 75);       // +150
+  assert.equal(Calc.winFromOdds(50, 1.909), 45.45);  // -110
+});

@@ -1219,7 +1219,7 @@ function loadLeagues() {
 }
 
 /* ---------------- My wagers ---------------- */
-const WAGERS = { list: [], editing: null };
+const WAGERS = { list: [], editing: null, pickId: null, autoWon: false };
 const todayLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
 
 async function wagersApi(body) {
@@ -1233,16 +1233,61 @@ async function wagersApi(body) {
 async function loadWagers() {
   if (!$('#wDate').value) $('#wDate').value = todayLocal();
   syncWonField();
+  await loadPicks();                               // for "Choose from My picks"
+  fillPickOptions();
   try { await wagersApi({ action: 'list' }); } catch (e) { setWagerStatus(e.message, true); }
   renderWagers();
 }
 
-function syncWonField() { $('#wWonWrap').hidden = $('#wResult').value !== 'won'; }
+function syncWonField() { $('#wWonWrap').hidden = $('#wResult').value !== 'won'; maybeFillWon(); }
+
+// ---- "What you bet on": choose a saved pick from My picks, or type your own
+const linkedPick = () => WAGERS.pickId && PICKS.list.find(p => p.id === WAGERS.pickId);
+const localDay = iso => { const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+
+function fillPickOptions() {
+  const open = PICKS.list.filter(p => p.status === 'pending').sort((a, b) => a.start.localeCompare(b.start));
+  const done = PICKS.list.filter(p => p.status !== 'pending').sort((a, b) => b.start.localeCompare(a.start)).slice(0, 50);
+  const opt = p => `<option value="${esc(p.id)}">${esc(p.label || p.selection)} (${esc(p.event)}, ${new Date(p.start).toLocaleDateString([], { month: 'short', day: 'numeric' })}) ${esc(p.american)}</option>`;
+  $('#wFromPick').innerHTML = `<option value="">${PICKS.list.length ? 'Type your own below, or choose from My picks' : 'No saved picks yet: type your own below'}</option>` +
+    (open.length ? `<optgroup label="Unsettled picks">${open.map(opt).join('')}</optgroup>` : '') +
+    (done.length ? `<optgroup label="Settled picks">${done.map(opt).join('')}</optgroup>` : '');
+  $('#wFromPick').value = linkedPick() ? WAGERS.pickId : '';
+}
+
+function choosePick(id) {
+  WAGERS.pickId = id || null;
+  const p = linkedPick();
+  if (!p) return;
+  $('#wNote').value = p.label || p.selection;
+  $('#wDate').value = localDay(p.start);
+  if (p.stake && !$('#wWagered').value) $('#wWagered').value = p.stake;
+  if (p.status !== 'pending') $('#wResult').value = p.status;           // already graded
+  WAGERS.autoWon = true;
+  syncWonField();
+  setWagerStatus(`Filled in from My picks: ${p.label || p.selection}. Check the amount you wagered.`);
+}
+
+// When a linked pick wins, work out the amount won from its odds, unless you typed your own.
+function maybeFillWon() {
+  const p = linkedPick(), wagered = +$('#wWagered').value;
+  const hint = $('#wWonHint');
+  if (p && p.decimal > 1 && $('#wResult').value === 'won' && wagered > 0 && (WAGERS.autoWon || !$('#wWon').value)) {
+    $('#wWon').value = Calc.winFromOdds(wagered, p.decimal);
+    WAGERS.autoWon = true;
+    hint.textContent = `Worked out from the pick's odds (${p.american}). Change it if your payout was different.`;
+  } else if (!WAGERS.autoWon || !p) {
+    hint.textContent = 'Your profit, not counting the stake';
+  }
+}
 function setWagerStatus(msg, err) { $('#wStatus').textContent = msg; $('#wStatus').className = 'status' + (err ? ' err' : ''); }
 
 // Put a wager into the form to change it; Save changes updates it, Cancel goes back to adding.
 function startEdit(w) {
   WAGERS.editing = w.id;
+  WAGERS.pickId = w.pick_id || null;
+  WAGERS.autoWon = false;
+  fillPickOptions();
   $('#wDate').value = w.date;
   $('#wNote').value = w.note || '';
   $('#wWagered').value = w.wagered;
@@ -1258,8 +1303,12 @@ function startEdit(w) {
   renderWagers();
 }
 
-function stopEdit() {
+function stopEdit(resetDate) {
+  if (resetDate) $('#wDate').value = todayLocal();     // back to today after Cancel or Save changes
   WAGERS.editing = null;
+  WAGERS.pickId = null;
+  WAGERS.autoWon = false;
+  $('#wFromPick').value = '';
   $('#wNote').value = ''; $('#wWagered').value = ''; $('#wWon').value = '';
   $('#wResult').value = 'pending';
   syncWonField();
@@ -1295,7 +1344,7 @@ function renderWagers() {
     const amount = w.result === 'pending' ? `<span class="muted">${dollars(w.wagered)} at stake</span>` : `<span class="${tone(n)}"><b>${signedDollars(n)}</b></span>`;
     return `
     <div class="pick ${w.result}${WAGERS.editing === w.id ? ' being-edited' : ''}">
-      <div class="pmain"><b>${esc(w.note || 'Wager')}</b>
+      <div class="pmain"><b>${esc(w.note || 'Wager')}</b>${w.pick_id ? ' <span class="tag-pick">From My picks</span>' : ''}
         <span>${new Date(w.date + 'T12:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span></div>
       <div class="pres"><span class="badge ${w.result}">${word}</span>
         <span class="muted small">Wagered ${dollars(w.wagered)}${w.result === 'won' ? `, won ${dollars(w.won)}` : ''}</span></div>
@@ -1311,12 +1360,17 @@ function renderWagers() {
 }
 
 $('#wResult').addEventListener('change', syncWonField);
+$('#wFromPick').addEventListener('change', e => choosePick(e.target.value));
+$('#wWagered').addEventListener('input', maybeFillWon);
+$('#wWon').addEventListener('input', () => { WAGERS.autoWon = false; maybeFillWon(); });
 $('#wRange').addEventListener('change', renderWagers);
-$('#wCancel').addEventListener('click', () => { stopEdit(); setWagerStatus(''); renderWagers(); });
+$('#wCancel').addEventListener('click', () => { stopEdit(true); setWagerStatus(''); renderWagers(); });
 $('#wForm').addEventListener('submit', async e => {
   e.preventDefault();
   const wager = { date: $('#wDate').value, note: $('#wNote').value.trim(), wagered: +$('#wWagered').value,
                   result: $('#wResult').value, won: +$('#wWon').value || 0 };
+  const p = linkedPick();
+  if (p) Object.assign(wager, { pick_id: p.id, decimal: p.decimal });
   if (!(wager.wagered > 0)) return setWagerStatus('Enter how much you wagered.', true);
   if (wager.result === 'won' && !(wager.won > 0)) return setWagerStatus('Enter how much you won (your profit, not counting the stake).', true);
   const editing = WAGERS.editing;
@@ -1325,7 +1379,7 @@ $('#wForm').addEventListener('submit', async e => {
     await wagersApi(editing ? { action: 'update', id: editing, wager } : { action: 'add', wager });
     const what = wager.result === 'won' ? `won ${dollars(wager.won)}` : wager.result === 'lost' ? `lost ${dollars(wager.wagered)}`
       : wager.result === 'push' ? 'push' : `pending, ${dollars(wager.wagered)} at stake`;
-    stopEdit();
+    stopEdit(!!editing);                               // a new wager keeps its date for the next one
     setWagerStatus(`${editing ? 'Saved' : 'Added'}: ${what}.`);
     renderWagers();
     if (!editing) $('#wWagered').focus();
