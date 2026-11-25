@@ -930,6 +930,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if action == "add":
                 WAGERS.add(body.get("wager"))
+            elif action == "add_many":
+                WAGERS.add_many(body.get("wagers"))
             elif action == "update":
                 WAGERS.update(str(body.get("id")), body.get("wager"))
             elif action == "delete":

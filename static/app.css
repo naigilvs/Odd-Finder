@@ -443,3 +443,16 @@
   .wform .wnote { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--slate); flex: 1 1 280px; min-width: 0; }
   .wform .wnote select { width: 100%; }
   .pmain .tag-pick { display: inline-block; width: auto; margin-left: 6px; font-size: 11px; font-weight: 600; color: var(--amber); border: 1px solid var(--amber); border-radius: 4px; padding: 0 6px; vertical-align: 2px; }
+  .wform { flex-direction: column; align-items: stretch; }
+  #wRows { display: flex; flex-direction: column; gap: 12px; }
+  .wrow { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; }
+  .wrow + .wrow { border-top: 1px dashed var(--line); padding-top: 12px; }
+  .wrow label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--slate); }
+  .wrow input, .wrow select { background: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; color: var(--chalk); min-width: 120px; }
+  .wrow .wnote { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--slate); flex: 1 1 280px; min-width: 0; }
+  .wrow .wnote select { width: 100%; }
+  .wrow small { font-size: 12px; color: var(--slate); }
+  .wrow .wnum { font: 700 22px var(--display); color: var(--amber); align-self: center; min-width: 14px; }
+  .wrow .wnum:empty { display: none; }
+  .wform .wbuttons { display: flex; align-items: center; gap: 14px; margin: 4px 0 0; }
+  .wform .wbuttons .spacer { flex: 1; }

@@ -277,6 +277,10 @@ class Server(unittest.TestCase):
         self.assertEqual(self.post("/api/wagers", {"action": "add", "wager": {"wagered": 0, "result": "lost"}})[0], 400)
         self.assertEqual(len(self.post("/api/wagers", {"action": "list"})[1]["wagers"]), 1)
         self.assertEqual(self.post("/api/wagers", {"action": "delete", "id": wid})[1]["wagers"], [])
+        status, body = self.post("/api/wagers", {"action": "add_many", "wagers": [
+            {"wagered": 5, "result": "lost"}, {"wagered": 7, "result": "pending"}]})
+        self.assertEqual((status, len(body["wagers"])), (200, 2))
+        self.assertEqual(self.post("/api/wagers", {"action": "add_many", "wagers": [{"wagered": 5, "result": "lost"}, {"wagered": -1, "result": "lost"}]})[0], 400)
 
     def test_config_reports_freshness(self):
         status, body = self.get("/api/config")

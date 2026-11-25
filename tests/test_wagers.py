@@ -83,6 +83,25 @@ class WagerLog(unittest.TestCase):
         self.assertNotIn("pick_id", got)                    # edited without the link: unlinked
         self.assertNotIn("decimal", got)
 
+    def test_several_at_once(self):
+        added = self.store.add_many([
+            {"date": "2026-11-25", "note": "A", "wagered": 10, "result": "pending"},
+            {"date": "2026-11-25", "note": "B", "wagered": 20, "result": "won", "won": 18},
+            {"date": "2026-11-25", "note": "C", "wagered": 30, "result": "lost"}])
+        self.assertEqual([w["note"] for w in added], ["A", "B", "C"])
+        self.assertEqual(len({w["id"] for w in added}), 3)
+        newest_first = [w["note"] for w in wagers.WagerStore(self.store.path).all()]
+        self.assertEqual(newest_first, ["C", "B", "A"])                        # entry order kept
+
+    def test_several_at_once_is_all_or_none(self):
+        with self.assertRaises(ValueError) as e:
+            self.store.add_many([{"wagered": 10, "result": "lost"}, {"wagered": 0, "result": "lost"}])
+        self.assertIn("Wager 2", str(e.exception))
+        self.assertEqual(self.store.all(), [])                                 # nothing saved
+        for bad in ([], "nope", [{"wagered": 1, "result": "lost"}] * 51):
+            with self.assertRaises(ValueError):
+                self.store.add_many(bad)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1219,8 +1219,10 @@ function loadLeagues() {
 }
 
 /* ---------------- My wagers ---------------- */
-const WAGERS = { list: [], editing: null, pickId: null, autoWon: false };
+const WAGERS = { list: [], editing: null };
 const todayLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+const localDay = iso => { const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+const RESULT_WORD = { won: 'Won', lost: 'Lost', push: 'Push', pending: 'Pending' };
 
 async function wagersApi(body) {
   const r = await fetch('/api/wagers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -1231,92 +1233,139 @@ async function wagersApi(body) {
 }
 
 async function loadWagers() {
-  if (!$('#wDate').value) $('#wDate').value = todayLocal();
-  syncWonField();
   await loadPicks();                               // for "Choose from My picks"
-  fillPickOptions();
+  if (!$('#wRows').children.length) resetForm();
+  else $('#wRows').querySelectorAll('.wrow').forEach(fillPickOptions);
   try { await wagersApi({ action: 'list' }); } catch (e) { setWagerStatus(e.message, true); }
   renderWagers();
 }
 
-function syncWonField() { $('#wWonWrap').hidden = $('#wResult').value !== 'won'; maybeFillWon(); }
+function setWagerStatus(msg, err) { $('#wStatus').textContent = msg; $('#wStatus').className = 'status' + (err ? ' err' : ''); }
 
-// ---- "What you bet on": choose a saved pick from My picks, or type your own
-const linkedPick = () => WAGERS.pickId && PICKS.list.find(p => p.id === WAGERS.pickId);
-const localDay = iso => { const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+// ---- the form: one row per wager ("+ Add another wager" adds rows; editing uses one row)
+function makeRow(date) {
+  const row = document.createElement('div');
+  row.className = 'wrow';
+  row.innerHTML = `
+    <span class="wnum" aria-hidden="true"></span>
+    <label>Date<input type="date" class="f-date" required></label>
+    <div class="wnote">
+      <label>What you bet on <span class="muted">(optional)</span><select class="f-pick" aria-label="Choose a saved pick from My picks"></select></label>
+      <input class="f-note" maxlength="120" placeholder="e.g. Lakers -3.5" autocomplete="off" aria-label="What you bet on">
+    </div>
+    <label>Amount wagered ($)<input class="f-wagered" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
+    <label>Result
+      <select class="f-result">
+        <option value="pending" selected>Pending (set it later)</option>
+        <option value="won">Won</option>
+        <option value="lost">Lost</option>
+        <option value="push">Push (stake returned)</option>
+      </select>
+    </label>
+    <label class="f-wonwrap">Amount won ($)<input class="f-won" type="number" min="0.01" step="0.01" inputmode="decimal"><small class="f-hint">Your profit, not counting the stake</small></label>
+    <button type="button" class="linkbtn remove f-remove" aria-label="Remove this wager from the form">Remove</button>`;
+  row.querySelector('.f-date').value = date || todayLocal();
+  row.dataset.pickId = '';
+  row.dataset.autoWon = '';
+  $('#wRows').appendChild(row);
+  fillPickOptions(row);
+  syncRow(row);
+  return row;
+}
 
-function fillPickOptions() {
+const f = (row, cls) => row.querySelector('.' + cls);
+const rowPick = row => row.dataset.pickId && PICKS.list.find(p => p.id === row.dataset.pickId);
+
+function fillPickOptions(row) {
   const open = PICKS.list.filter(p => p.status === 'pending').sort((a, b) => a.start.localeCompare(b.start));
   const done = PICKS.list.filter(p => p.status !== 'pending').sort((a, b) => b.start.localeCompare(a.start)).slice(0, 50);
   const opt = p => `<option value="${esc(p.id)}">${esc(p.label || p.selection)} (${esc(p.event)}, ${new Date(p.start).toLocaleDateString([], { month: 'short', day: 'numeric' })}) ${esc(p.american)}</option>`;
-  $('#wFromPick').innerHTML = `<option value="">${PICKS.list.length ? 'Type your own below, or choose from My picks' : 'No saved picks yet: type your own below'}</option>` +
+  f(row, 'f-pick').innerHTML = `<option value="">${PICKS.list.length ? 'Type your own below, or choose from My picks' : 'No saved picks yet: type your own below'}</option>` +
     (open.length ? `<optgroup label="Unsettled picks">${open.map(opt).join('')}</optgroup>` : '') +
     (done.length ? `<optgroup label="Settled picks">${done.map(opt).join('')}</optgroup>` : '');
-  $('#wFromPick').value = linkedPick() ? WAGERS.pickId : '';
+  f(row, 'f-pick').value = rowPick(row) ? row.dataset.pickId : '';
 }
 
-function choosePick(id) {
-  WAGERS.pickId = id || null;
-  const p = linkedPick();
+function choosePick(row, id) {
+  row.dataset.pickId = id || '';
+  const p = rowPick(row);
   if (!p) return;
-  $('#wNote').value = p.label || p.selection;
-  $('#wDate').value = localDay(p.start);
-  if (p.stake && !$('#wWagered').value) $('#wWagered').value = p.stake;
-  if (p.status !== 'pending') $('#wResult').value = p.status;           // already graded
-  WAGERS.autoWon = true;
-  syncWonField();
+  f(row, 'f-note').value = p.label || p.selection;
+  f(row, 'f-date').value = localDay(p.start);
+  if (p.stake && !f(row, 'f-wagered').value) f(row, 'f-wagered').value = p.stake;
+  if (p.status !== 'pending') f(row, 'f-result').value = p.status;        // already graded
+  row.dataset.autoWon = '1';
+  syncRow(row);
   setWagerStatus(`Filled in from My picks: ${p.label || p.selection}. Check the amount you wagered.`);
 }
 
-// When a linked pick wins, work out the amount won from its odds, unless you typed your own.
-function maybeFillWon() {
-  const p = linkedPick(), wagered = +$('#wWagered').value;
-  const hint = $('#wWonHint');
-  if (p && p.decimal > 1 && $('#wResult').value === 'won' && wagered > 0 && (WAGERS.autoWon || !$('#wWon').value)) {
-    $('#wWon').value = Calc.winFromOdds(wagered, p.decimal);
-    WAGERS.autoWon = true;
+// Show "Amount won" only for wins; for a linked pick, work it out from the odds unless you typed your own.
+function syncRow(row) {
+  const won = f(row, 'f-result').value === 'won';
+  f(row, 'f-wonwrap').hidden = !won;
+  const p = rowPick(row), wagered = +f(row, 'f-wagered').value, hint = f(row, 'f-hint');
+  if (won && p && p.decimal > 1 && wagered > 0 && (row.dataset.autoWon || !f(row, 'f-won').value)) {
+    f(row, 'f-won').value = Calc.winFromOdds(wagered, p.decimal);
+    row.dataset.autoWon = '1';
     hint.textContent = `Worked out from the pick's odds (${p.american}). Change it if your payout was different.`;
-  } else if (!WAGERS.autoWon || !p) {
+  } else if (!row.dataset.autoWon || !p) {
     hint.textContent = 'Your profit, not counting the stake';
   }
 }
-function setWagerStatus(msg, err) { $('#wStatus').textContent = msg; $('#wStatus').className = 'status' + (err ? ' err' : ''); }
 
-// Put a wager into the form to change it; Save changes updates it, Cancel goes back to adding.
+function readRow(row) {
+  const w = { date: f(row, 'f-date').value, note: f(row, 'f-note').value.trim(), wagered: +f(row, 'f-wagered').value,
+              result: f(row, 'f-result').value, won: +f(row, 'f-won').value || 0 };
+  const p = rowPick(row);
+  if (p) Object.assign(w, { pick_id: p.id, decimal: p.decimal });
+  return w;
+}
+
+function rowProblem(w) {
+  if (!(w.wagered > 0)) return 'enter how much you wagered';
+  if (w.result === 'won' && !(w.won > 0)) return 'enter how much you won (your profit, not counting the stake)';
+  return null;
+}
+
+function refreshFormButtons() {
+  const rows = [...$('#wRows').querySelectorAll('.wrow')];
+  rows.forEach((r, i) => {
+    f(r, 'wnum').textContent = rows.length > 1 ? i + 1 : '';
+    f(r, 'f-remove').hidden = rows.length < 2;
+  });
+  const editing = !!WAGERS.editing;
+  $('#wMore').hidden = editing;
+  $('#wCancel').hidden = !editing;
+  $('#wAdd').textContent = editing ? 'Save changes' : rows.length > 1 ? `Add ${rows.length} wagers` : 'Add wager';
+  $('#wForm').classList.toggle('editing', editing);
+}
+
+function resetForm(date) {
+  WAGERS.editing = null;
+  $('#wRows').innerHTML = '';
+  makeRow(date);
+  refreshFormButtons();
+}
+
 function startEdit(w) {
   WAGERS.editing = w.id;
-  WAGERS.pickId = w.pick_id || null;
-  WAGERS.autoWon = false;
-  fillPickOptions();
-  $('#wDate').value = w.date;
-  $('#wNote').value = w.note || '';
-  $('#wWagered').value = w.wagered;
-  $('#wResult').value = w.result;
-  $('#wWon').value = w.result === 'won' ? w.won : '';
-  syncWonField();
-  $('#wAdd').textContent = 'Save changes';
-  $('#wCancel').hidden = false;
-  $('#wForm').classList.add('editing');
+  $('#wRows').innerHTML = '';
+  const row = makeRow(w.date);
+  row.dataset.pickId = w.pick_id || '';
+  fillPickOptions(row);
+  f(row, 'f-note').value = w.note || '';
+  f(row, 'f-wagered').value = w.wagered;
+  f(row, 'f-result').value = w.result;
+  f(row, 'f-won').value = w.result === 'won' ? w.won : '';
+  syncRow(row);
+  refreshFormButtons();
   setWagerStatus(`Editing "${w.note || 'Wager'}". Change anything, then Save changes.`);
   $('#wForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  (w.result === 'pending' ? $('#wResult') : $('#wWagered')).focus();
+  (w.result === 'pending' ? f(row, 'f-result') : f(row, 'f-wagered')).focus();
   renderWagers();
 }
 
-function stopEdit(resetDate) {
-  if (resetDate) $('#wDate').value = todayLocal();     // back to today after Cancel or Save changes
-  WAGERS.editing = null;
-  WAGERS.pickId = null;
-  WAGERS.autoWon = false;
-  $('#wFromPick').value = '';
-  $('#wNote').value = ''; $('#wWagered').value = ''; $('#wWon').value = '';
-  $('#wResult').value = 'pending';
-  syncWonField();
-  $('#wAdd').textContent = 'Add wager';
-  $('#wCancel').hidden = true;
-  $('#wForm').classList.remove('editing');
-}
-
+// ---- the list and the stats
 function wagerCutoff() {
   const v = $('#wRange').value, today = todayLocal();
   if (!v) return null;
@@ -1331,22 +1380,30 @@ function renderWagers() {
   const list = WAGERS.list.filter(w => !cutoff || w.date >= cutoff);
   const s = Calc.wagerSummary(list);
   const tone = x => x > 0 ? 'up' : x < 0 ? 'down' : '';
+  const card = (big, cls, text) => `<div><b class="${cls || ''}">${big}</b>${text}</div>`;
+  const name = w => esc(w.note || 'Wager');
   $('#wSummary').innerHTML = list.length ? [
-    s.count ? `<div><b class="${tone(s.net)}">${signedDollars(s.net)}</b>${s.net >= 0 ? 'net profit' : 'net loss'}</div>` : '',
-    s.count ? `<div><b>${dollars(s.wagered)}</b>wagered on ${s.count} settled bet${s.count === 1 ? '' : 's'}</div>` : '',
-    s.count ? `<div><b class="${tone(s.net)}">${s.roi != null ? signed(s.roi, 1) : '–'}</b>return on money wagered</div>` : '',
-    s.count ? `<div><b>${s.won}-${s.lost}${s.push ? `-${s.push}` : ''}</b>record (won-lost${s.push ? '-push' : ''})</div>` : '',
-    s.pending ? `<div><b>${dollars(s.atStake)}</b>at stake on ${s.pending} pending bet${s.pending === 1 ? '' : 's'}</div>` : '',
-  ].join('') : '';
+    s.count && card(signedDollars(s.net), tone(s.net), s.net >= 0 ? 'net profit' : 'net loss'),
+    s.count && card(signedDollars(s.totalWon), s.totalWon ? 'up' : '', `total won on ${s.won} winning bet${s.won === 1 ? '' : 's'}`),
+    s.count && card(s.totalLost ? signedDollars(-s.totalLost) : '$0', s.totalLost ? 'down' : '', `total lost on ${s.lost} losing bet${s.lost === 1 ? '' : 's'}`),
+    s.count && card(s.winRate != null ? pct(s.winRate, 0) : '–', '', `win rate (${s.won}-${s.lost}${s.push ? `-${s.push}` : ''} won-lost${s.push ? '-push' : ''})`),
+    s.count && card(dollars(s.wagered), '', `wagered on ${s.count} settled bet${s.count === 1 ? '' : 's'}`),
+    s.count && card(s.roi != null ? signed(s.roi, 1) : '–', tone(s.net), 'return on money wagered'),
+    s.count && card(dollars(s.avgBet), '', 'average bet'),
+    s.biggestWin && card(signedDollars(s.biggestWin.won), 'up', `biggest win: ${name(s.biggestWin)}`),
+    s.biggestLoss && card(signedDollars(-s.biggestLoss.wagered), 'down', `biggest loss: ${name(s.biggestLoss)}`),
+    s.streak && card(`${s.streak.result === 'won' ? 'Won' : 'Lost'} ${s.streak.length}`, s.streak.result === 'won' ? 'up' : 'down',
+      `current streak (latest ${s.streak.length === 1 ? 'bet' : `${s.streak.length} bets`} in a row)`),
+    s.pending && card(dollars(s.atStake), '', `at stake on ${s.pending} pending bet${s.pending === 1 ? '' : 's'}`),
+  ].filter(Boolean).join('') : '';
   $('#wList').innerHTML = list.map(w => {
     const n = Calc.wagerNet(w);
-    const word = { won: 'Won', lost: 'Lost', push: 'Push', pending: 'Pending' }[w.result];
     const amount = w.result === 'pending' ? `<span class="muted">${dollars(w.wagered)} at stake</span>` : `<span class="${tone(n)}"><b>${signedDollars(n)}</b></span>`;
     return `
     <div class="pick ${w.result}${WAGERS.editing === w.id ? ' being-edited' : ''}">
       <div class="pmain"><b>${esc(w.note || 'Wager')}</b>${w.pick_id ? ' <span class="tag-pick">From My picks</span>' : ''}
         <span>${new Date(w.date + 'T12:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span></div>
-      <div class="pres"><span class="badge ${w.result}">${word}</span>
+      <div class="pres"><span class="badge ${w.result}">${RESULT_WORD[w.result]}</span>
         <span class="muted small">Wagered ${dollars(w.wagered)}${w.result === 'won' ? `, won ${dollars(w.won)}` : ''}</span></div>
       <div class="pact">${amount}
         <button class="linkbtn" data-edit="${w.id}">${w.result === 'pending' ? 'Set result' : 'Edit'}</button>
@@ -1354,35 +1411,61 @@ function renderWagers() {
     </div>`;
   }).join('');
   $('#wEmpty').innerHTML = !WAGERS.list.length
-    ? '<div class="big" aria-hidden="true">💵</div><h3>No wagers logged yet</h3><p>Add the first bet you placed with the form above.</p>'
+    ? '<div class="big" aria-hidden="true">💵</div><h3>No wagers logged yet</h3><p>Add the bets you placed with the form above. Use "+ Add another wager" to log several at once.</p>'
     : !list.length ? '<h3>No wagers in this period</h3><p>Choose a longer period above to see older ones.</p>' : '';
   $('#wEmpty').hidden = !$('#wEmpty').innerHTML;
 }
 
-$('#wResult').addEventListener('change', syncWonField);
-$('#wFromPick').addEventListener('change', e => choosePick(e.target.value));
-$('#wWagered').addEventListener('input', maybeFillWon);
-$('#wWon').addEventListener('input', () => { WAGERS.autoWon = false; maybeFillWon(); });
+// ---- events
+$('#wRows').addEventListener('change', e => {
+  const row = e.target.closest('.wrow');
+  if (!row) return;
+  if (e.target.classList.contains('f-pick')) choosePick(row, e.target.value);
+  else syncRow(row);
+});
+$('#wRows').addEventListener('input', e => {
+  const row = e.target.closest('.wrow');
+  if (!row) return;
+  if (e.target.classList.contains('f-won')) row.dataset.autoWon = '';
+  syncRow(row);
+});
+$('#wRows').addEventListener('click', e => {
+  if (!e.target.classList.contains('f-remove')) return;
+  e.target.closest('.wrow').remove();
+  refreshFormButtons();
+});
+$('#wMore').addEventListener('click', () => {
+  const rows = $('#wRows').querySelectorAll('.wrow');
+  const last = rows[rows.length - 1];
+  const row = makeRow(last ? f(last, 'f-date').value : todayLocal());      // same day as the one above
+  refreshFormButtons();
+  f(row, 'f-pick').focus();
+});
 $('#wRange').addEventListener('change', renderWagers);
-$('#wCancel').addEventListener('click', () => { stopEdit(true); setWagerStatus(''); renderWagers(); });
+$('#wCancel').addEventListener('click', () => { resetForm(); setWagerStatus(''); renderWagers(); });
 $('#wForm').addEventListener('submit', async e => {
   e.preventDefault();
-  const wager = { date: $('#wDate').value, note: $('#wNote').value.trim(), wagered: +$('#wWagered').value,
-                  result: $('#wResult').value, won: +$('#wWon').value || 0 };
-  const p = linkedPick();
-  if (p) Object.assign(wager, { pick_id: p.id, decimal: p.decimal });
-  if (!(wager.wagered > 0)) return setWagerStatus('Enter how much you wagered.', true);
-  if (wager.result === 'won' && !(wager.won > 0)) return setWagerStatus('Enter how much you won (your profit, not counting the stake).', true);
+  const rows = [...$('#wRows').querySelectorAll('.wrow')];
+  const wagers = rows.map(readRow);
+  for (let i = 0; i < wagers.length; i++) {
+    const problem = rowProblem(wagers[i]);
+    if (problem) {
+      rows[i].querySelector(problem.startsWith('enter how much you won') ? '.f-won' : '.f-wagered').focus();
+      return setWagerStatus(wagers.length > 1 ? `Wager ${i + 1}: ${problem}.` : problem[0].toUpperCase() + problem.slice(1) + '.', true);
+    }
+  }
   const editing = WAGERS.editing;
   $('#wAdd').disabled = true;
   try {
-    await wagersApi(editing ? { action: 'update', id: editing, wager } : { action: 'add', wager });
-    const what = wager.result === 'won' ? `won ${dollars(wager.won)}` : wager.result === 'lost' ? `lost ${dollars(wager.wagered)}`
-      : wager.result === 'push' ? 'push' : `pending, ${dollars(wager.wagered)} at stake`;
-    stopEdit(!!editing);                               // a new wager keeps its date for the next one
-    setWagerStatus(`${editing ? 'Saved' : 'Added'}: ${what}.`);
+    if (editing) await wagersApi({ action: 'update', id: editing, wager: wagers[0] });
+    else await wagersApi({ action: 'add_many', wagers });
+    const one = wagers[0];
+    const what = one.result === 'won' ? `won ${dollars(one.won)}` : one.result === 'lost' ? `lost ${dollars(one.wagered)}`
+      : one.result === 'push' ? 'push' : `pending, ${dollars(one.wagered)} at stake`;
+    const keepDate = rows.length ? f(rows[rows.length - 1], 'f-date').value : todayLocal();
+    resetForm(editing ? todayLocal() : keepDate);                        // a new batch keeps its date for the next one
+    setWagerStatus(editing ? `Saved: ${what}.` : wagers.length > 1 ? `Added ${wagers.length} wagers.` : `Added: ${what}.`);
     renderWagers();
-    if (!editing) $('#wWagered').focus();
   } catch (err) { setWagerStatus(err.message, true); }
   $('#wAdd').disabled = false;
 });
@@ -1393,7 +1476,7 @@ $('#wList').addEventListener('click', async e => {
   if (!b || !confirm('Delete this wager? This can\'t be undone.')) return;
   try {
     await wagersApi({ action: 'delete', id: b.dataset.del });
-    if (WAGERS.editing === b.dataset.del) stopEdit();
+    if (WAGERS.editing === b.dataset.del) resetForm();
     setWagerStatus('Wager deleted.');
   } catch (err) { setWagerStatus(err.message, true); }
   renderWagers();

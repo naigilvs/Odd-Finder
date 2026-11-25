@@ -100,6 +100,27 @@ class WagerStore:
             self._write()
         return w
 
+    def add_many(self, items):
+        """Several wagers at once: all are checked first, and none are saved if any is wrong."""
+        if not isinstance(items, list) or not items:
+            raise ValueError("Add at least one wager.")
+        if len(items) > 50:
+            raise ValueError("Add at most 50 wagers at a time.")
+        cleaned = []
+        for i, data in enumerate(items, 1):
+            try:
+                cleaned.append(clean(data))
+            except ValueError as e:
+                raise ValueError(f"Wager {i}: {e}" if len(items) > 1 else str(e))
+        now = datetime.now(timezone.utc)
+        for i, w in enumerate(cleaned):
+            # keep the order they were entered in (each a microsecond apart)
+            w.update({"id": uuid.uuid4().hex[:12], "created": now.replace(microsecond=(now.microsecond + i) % 1_000_000).isoformat()})
+        with self.lock:
+            self.wagers.extend(cleaned)
+            self._write()
+        return cleaned
+
     def update(self, wid, data):
         w = clean(data)
         with self.lock:

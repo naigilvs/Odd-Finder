@@ -119,18 +119,36 @@
   }
   // Pending bets (result not set yet) are kept out of profit and record: shown as money at stake.
   function wagerSummary(list) {
-    const s = { count: 0, wagered: 0, net: 0, won: 0, lost: 0, push: 0, pending: 0, atStake: 0 };
+    const r2 = x => Math.round(x * 100) / 100;
+    const s = { count: 0, wagered: 0, net: 0, won: 0, lost: 0, push: 0, pending: 0, atStake: 0,
+                totalWon: 0, totalLost: 0, biggestWin: null, biggestLoss: null, streak: null };
     for (const w of list) {
       if (w.result === 'pending') { s.pending += 1; s.atStake += w.wagered; continue; }
       s.count += 1;
       s.wagered += w.wagered;
       s.net += wagerNet(w);
       s[w.result] += 1;
+      if (w.result === 'won') {
+        s.totalWon += w.won;
+        if (!s.biggestWin || w.won > s.biggestWin.won) s.biggestWin = w;
+      }
+      if (w.result === 'lost') {
+        s.totalLost += w.wagered;
+        if (!s.biggestLoss || w.wagered > s.biggestLoss.wagered) s.biggestLoss = w;
+      }
     }
-    s.atStake = Math.round(s.atStake * 100) / 100;
-    s.wagered = Math.round(s.wagered * 100) / 100;
-    s.net = Math.round(s.net * 100) / 100;
+    for (const k of ['atStake', 'wagered', 'net', 'totalWon', 'totalLost']) s[k] = r2(s[k]);
     s.roi = s.wagered ? s.net / s.wagered : null;
+    s.winRate = s.won + s.lost ? s.won / (s.won + s.lost) : null;          // pushes don't count
+    s.avgBet = s.count ? r2(s.wagered / s.count) : null;
+    // Current streak: the latest settled results in a row (pushes skipped), e.g. won 3.
+    const settled = list.filter(w => w.result === 'won' || w.result === 'lost')
+      .sort((a, b) => (b.date + (b.created || '')).localeCompare(a.date + (a.created || '')));
+    if (settled.length) {
+      let n = 0;
+      while (n < settled.length && settled[n].result === settled[0].result) n++;
+      s.streak = { result: settled[0].result, length: n };
+    }
     return s;
   }
 

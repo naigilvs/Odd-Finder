@@ -117,3 +117,20 @@ test('amount won from the odds', () => {
   assert.equal(Calc.winFromOdds(50, 2.5), 75);       // +150
   assert.equal(Calc.winFromOdds(50, 1.909), 45.45);  // -110
 });
+
+test('my wagers: extra stats', () => {
+  const w = (result, wagered, won, date, note) => ({ result, wagered, won: won || 0, date, note, created: date });
+  const s = Calc.wagerSummary([
+    w('won', 50, 45, '2026-11-01', 'A'), w('lost', 30, 0, '2026-11-02', 'B'), w('won', 20, 60, '2026-11-03', 'C'),
+    w('push', 10, 0, '2026-11-04', 'D'), w('won', 10, 9, '2026-11-05', 'E'), w('pending', 25, 0, '2026-11-06', 'F'),
+  ]);
+  assert.equal(s.totalWon, 114);
+  assert.equal(s.totalLost, 30);
+  assert.equal(s.net, 84);                               // total won - total lost
+  assert.equal(s.winRate, 3 / 4);                        // pushes don't count
+  assert.equal(s.avgBet, 24);                            // 120 on 5 settled bets
+  assert.equal(s.biggestWin.note, 'C');
+  assert.equal(s.biggestLoss.note, 'B');
+  assert.deepEqual(s.streak, { result: 'won', length: 2 });   // E and C (push D skipped)
+  assert.equal(Calc.wagerSummary([]).streak, null);
+});
