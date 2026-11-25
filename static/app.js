@@ -998,14 +998,15 @@ function openMenu() {
 // Backup status at the bottom of the menu.
 async function showBackup() {
   try {
-    const b = (await getJSON('/api/config')).backup || {};
-    const el = $('#sideBackup');
-    el.className = 'side-backup' + (b.error || (!b.enabled && !b.demo) ? ' warn' : '');
-    el.textContent = b.demo ? 'Backups are off in demo mode.'
-      : !b.enabled ? 'Backups are off: iCloud Drive wasn\'t found on this Mac.'
-      : b.error ? b.error
-      : b.last ? `☁ Picks and results backed up to ${b.where} ${ago(new Date(b.last).getTime())}.`
-      : `☁ Picks and results are backed up to ${b.where} automatically.`;
+    const cfg = await getJSON('/api/config');
+    const b = cfg.backup || {}, g = cfg.github_backup || {};
+    const line = (x, icon) => !x.enabled ? null
+      : x.error ? `<span class="warn">${esc(x.error)}</span>`
+      : x.last ? `${icon} Backed up to ${x.where} ${ago(new Date(x.last).getTime())}`
+      : `${icon} Backing up to ${x.where} automatically`;
+    const lines = b.demo ? ['Backups are off in demo mode.']
+      : [line(b, '☁') || '<span class="warn">iCloud Drive backup is off: iCloud Drive wasn\'t found.</span>', line(g, '⎇')].filter(Boolean);
+    $('#sideBackup').innerHTML = lines.map(l => `<span>${l}</span>`).join('');
   } catch (e) { /* status is optional */ }
 }
 function closeMenu() {

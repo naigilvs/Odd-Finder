@@ -408,6 +408,7 @@ IMAGES = None
 PICKS = picks.PickStore()       # saved picks, in data/picks.json
 TRACK = picks.TrackStore()      # every gradable bet the bot showed, in data/track.json
 BACKUP = None                   # copies picks and track record to iCloud Drive (not in demo mode)
+GITBACKUP = None                # and commits them to a private GitHub repo, if one is set
 
 
 # --------------------------------------------------------------------------- analysis
@@ -902,6 +903,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "demo": DEMO, "has_key": bool(API_KEY), "quota": _quota,
                                 "outdated": code_changed_since_start(),
                                 "backup": BACKUP.status() if BACKUP else {"enabled": False, "demo": DEMO},
+                                "github_backup": GITBACKUP.status() if GITBACKUP else {"enabled": False},
                                 "prop_sports": list(PROP_MARKETS)})
             elif url.path == "/api/accuracy":
                 self.send_json(stats.accuracy())
@@ -942,7 +944,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global DEMO, API_KEY, IMAGES, PICKS, TRACK, BACKUP
+    global DEMO, API_KEY, IMAGES, PICKS, TRACK, BACKUP, GITBACKUP
     ap = argparse.ArgumentParser(description="Betting value finder")
     ap.add_argument("--demo", action="store_true", help="use made-up sample data")
     ap.add_argument("--port", type=int, default=8765)
@@ -954,13 +956,20 @@ def main():
         PICKS = picks.PickStore(stats.DATA_DIR / "picks_demo.json")
         TRACK = picks.TrackStore(stats.DATA_DIR / "track_demo.json")
     else:      # back up real picks and results, and restore them if they were deleted
-        folder = load_config().get("backup_folder")
+        cfg = load_config()
+        folder = cfg.get("backup_folder")
         BACKUP = backup.Backup(stats.DATA_DIR, Path(folder).expanduser() if folder else backup.default_folder())
-        restored = BACKUP.restore_missing()
+        GITBACKUP = backup.GitBackup(stats.DATA_DIR, cfg.get("github_backup"))
+        restored = []
+        for b in (BACKUP, GITBACKUP):          # iCloud first, then GitHub for anything still missing
+            got = b.restore_missing()
+            if got:
+                print(f"Restored from your backup on {b.status()['where']}: {', '.join(got)}")
+            restored += got
         if restored:
-            print(f"Restored from your backup in {BACKUP.status()['where']}: {', '.join(restored)}")
             PICKS, TRACK = picks.PickStore(), picks.TrackStore()     # load the restored files
         BACKUP.start()
+        GITBACKUP.start()
         if not BACKUP.enabled:
             print("Backups are off: iCloud Drive wasn't found. Set \"backup_folder\" in config.json to choose a folder.")
     stats.warm_up()   # start downloading past results in the background

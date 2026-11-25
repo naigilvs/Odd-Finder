@@ -84,5 +84,70 @@ class Backups(unittest.TestCase):
         self.assertEqual(off.restore_missing(), [])
 
 
+
+class GitHubBackups(unittest.TestCase):
+    """Uses a local bare repo in place of GitHub (no internet needed)."""
+
+    def setUp(self):
+        import subprocess
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.remote = root / "remote.git"
+        subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(self.remote)], check=True)
+        self.data = root / "data"
+        self.data.mkdir()
+        self.g = backup.GitBackup(self.data, str(self.remote))
+        os.environ.setdefault("GIT_AUTHOR_NAME", "Test")
+        os.environ.setdefault("GIT_AUTHOR_EMAIL", "test@example.com")
+        os.environ.setdefault("GIT_COMMITTER_NAME", "Test")
+        os.environ.setdefault("GIT_COMMITTER_EMAIL", "test@example.com")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def commits(self):
+        import subprocess
+        r = subprocess.run(["git", "--git-dir", str(self.remote), "log", "--oneline", "main"], capture_output=True, text=True)
+        return [l for l in r.stdout.splitlines() if l]
+
+    def files_in_remote(self):
+        import subprocess
+        r = subprocess.run(["git", "--git-dir", str(self.remote), "ls-tree", "--name-only", "main"], capture_output=True, text=True)
+        return sorted(r.stdout.split())
+
+    def test_pushes_only_when_something_changed(self):
+        (self.data / "picks.json").write_text('[{"id": 1}]')
+        (self.data / "config.json").write_text('{"odds_api_key": "secret"}')
+        self.assertTrue(self.g.run())
+        self.assertFalse(self.g.run())                       # nothing new
+        (self.data / "picks.json").write_text('[{"id": 1}, {"id": 2}]')
+        self.assertTrue(self.g.run())
+        self.assertEqual(len(self.commits()), 2)             # every version is kept
+        self.assertEqual(self.files_in_remote(), ["picks.json"])
+        self.assertIsNone(self.g.error)
+
+    def test_restores_on_a_fresh_computer(self):
+        (self.data / "picks.json").write_text('[{"id": 7}]')
+        (self.data / "track.json").write_text('[]')
+        self.g.run()
+        fresh = Path(self.tmp.name) / "fresh-data"
+        fresh.mkdir()
+        restored = backup.GitBackup(fresh, str(self.remote)).restore_missing()
+        self.assertEqual(sorted(restored), ["picks.json", "track.json"])
+        self.assertEqual(json.loads((fresh / "picks.json").read_text()), [{"id": 7}])
+
+    def test_bad_link_reports_an_error_without_crashing(self):
+        bad = backup.GitBackup(self.data, str(Path(self.tmp.name) / "no-such-repo.git"))
+        (self.data / "picks.json").write_text('[]')
+        self.assertFalse(bad.run())
+        self.assertIn("GitHub backup failed", bad.error)
+        self.assertEqual(bad.restore_missing(), [])
+
+    def test_off_without_a_link(self):
+        off = backup.GitBackup(self.data, None)
+        self.assertFalse(off.enabled)
+        self.assertFalse(off.run())
+
+
 if __name__ == "__main__":
     unittest.main()

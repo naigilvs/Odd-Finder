@@ -123,3 +123,99 @@ class Backup:
         return {"enabled": self.enabled, "folder": str(self.folder) if self.folder else None,
                 "where": "iCloud Drive" if self.folder and ICLOUD in self.folder.parents else (self.folder.name if self.folder else None),
                 "last": self.last, "error": self.error}
+
+
+# --------------------------------------------------------------------------- GitHub backup
+
+import os
+import subprocess
+
+GIT_EVERY = 3600             # seconds between GitHub backups
+
+
+class GitBackup:
+    """Commits picks and the track record to a private GitHub repo and pushes, so every
+    version is kept. The local copy of that repo lives in data/github-backup."""
+
+    def __init__(self, data_dir, repo_url, workdir=None):
+        self.data_dir = Path(data_dir)
+        self.url = repo_url
+        self.dir = Path(workdir) if workdir else self.data_dir / "github-backup"
+        self.last = None
+        self.error = None
+        self.lock = threading.Lock()
+
+    @property
+    def enabled(self):
+        return bool(self.url)
+
+    def _git(self, *args, cwd=None, check=True):
+        env = dict(os.environ, GIT_TERMINAL_PROMPT="0")          # never stop to ask for a password
+        r = subprocess.run(["git", *args], cwd=cwd or self.dir, env=env, capture_output=True, text=True, timeout=120)
+        if check and r.returncode != 0:
+            raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[-1] if (r.stderr or r.stdout).strip() else "git failed")
+        return r
+
+    def _ready(self):
+        """Make sure data/github-backup is a copy of the backup repo (download it if needed)."""
+        if (self.dir / ".git").is_dir():
+            return
+        self.dir.parent.mkdir(parents=True, exist_ok=True)
+        r = self._git("clone", self.url, str(self.dir), cwd=self.dir.parent, check=False)
+        if r.returncode != 0:
+            raise RuntimeError("Couldn't reach the GitHub backup repo. Check the link and that you're signed in to GitHub.")
+        if self._git("rev-parse", "--verify", "HEAD", check=False).returncode != 0:     # empty repo
+            self._git("checkout", "-b", "main", check=False)
+
+    def restore_missing(self):
+        restored = []
+        if not self.enabled:
+            return restored
+        try:
+            with self.lock:
+                self._ready()
+                self._git("pull", "--ff-only", "origin", "main", check=False)
+                for name in FILES:
+                    local, saved = self.data_dir / name, self.dir / name
+                    if not local.exists() and _readable(saved):
+                        _copy(saved, local)
+                        restored.append(name)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            self.error = str(e)
+        return restored
+
+    def run(self):
+        """Commit and push any changes. Returns True if a new backup was pushed."""
+        if not self.enabled:
+            return False
+        with self.lock:
+            try:
+                self._ready()
+                for name in FILES:
+                    src = self.data_dir / name
+                    if _readable(src):
+                        _copy(src, self.dir / name)
+                if not self._git("status", "--porcelain").stdout.strip():
+                    self.error = None
+                    return False                                   # nothing changed
+                self._git("add", *[n for n in FILES if (self.dir / n).exists()])
+                stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                self._git("commit", "-m", f"Backup {stamp}")
+                self._git("push", "-u", "origin", "HEAD:main")
+                self.last = datetime.now(timezone.utc).isoformat()
+                self.error = None
+                return True
+            except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+                self.error = f"GitHub backup failed: {e}"
+                return False
+
+    def start(self):
+        def loop():
+            while True:
+                self.run()
+                time.sleep(GIT_EVERY)
+        if self.enabled:
+            threading.Thread(target=loop, daemon=True).start()
+
+    def status(self):
+        return {"enabled": self.enabled, "where": "GitHub", "last": self.last, "error": self.error}

@@ -124,4 +124,14 @@ To use a different folder, such as Dropbox or Google Drive, add it to `config.js
 "backup_folder": "~/Dropbox/Odd Finder backups"
 ```
 
+### GitHub backup (optional)
+
+Picks and results can also be saved to a **private** GitHub repo, which keeps every version. Create an empty private repo and add its link to `config.json`:
+
+```
+"github_backup": "https://github.com/your-name/your-private-repo.git"
+```
+
+Once an hour (and when the bot starts), if anything changed, the bot commits and pushes `picks.json` and `track.json` there. If those files are missing on start, they're restored from iCloud Drive first, then from GitHub. Never use a public repo for this: anyone could see your bets.
+
 Demo mode doesn't make backups.
