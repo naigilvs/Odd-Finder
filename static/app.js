@@ -196,7 +196,7 @@ function renderResults(fresh) {
       <h3>No odds loaded for ${esc(tabName)} yet</h3><p>Pick the leagues above and press Scan to load ${esc(state.book.name)}'s lines.</p>`;
   } else if (!list.length) {
     $('#empty').innerHTML = all.length
-      ? `<h3>No bets match these filters</h3><p>Lower the minimum win chance or value to see more.</p>`
+      ? `<h3>No bets match these filters</h3><p>Use Show all above, or lower the minimum chance, value or books needed.</p>`
       : `<h3>No upcoming games found</h3><p>${esc(state.book.name)} has no lines for these leagues right now, or not enough other books offer them to compare.</p>`;
   } else {
     $('#empty').innerHTML = '';
@@ -214,6 +214,22 @@ function renderResults(fresh) {
     $('#status').textContent += `${$('#status').textContent ? ' ' : ''}${hidden} scanned league${hidden > 1 ? 's are' : ' is'} hidden. Tick ${hidden > 1 ? 'them' : 'it'} above to show ${hidden > 1 ? 'their' : 'its'} bets.`;
   }
   $('#shown').textContent = list.length ? `Showing ${Math.min(list.length, 300)} of ${list.length}` : '';
+  // Say when filters hide bets (e.g. player props offered by only 1-2 other books), with a way to show them.
+  const hiddenByFilters = all.length - list.length;
+  const note = $('#filterNote');
+  note.hidden = !hiddenByFilters;
+  if (hiddenByFilters) {
+    const books = +$('#minBooks').value || 1;
+    const fewBooks = all.filter(r => r.books_used.length < books).length;
+    note.innerHTML = `${hiddenByFilters} bet${hiddenByFilters > 1 ? 's are' : ' is'} hidden by your filters` +
+      (fewBooks ? `, including ${fewBooks} offered by fewer than ${books} other sportsbooks (often player props)` : '') +
+      `. <button class="linkbtn" id="showAll">Show all</button>`;
+    $('#showAll').onclick = () => {
+      $('#fMarket').value = ''; $('#fProb').value = 0; $('#fEv').value = -100; $('#minBooks').value = 1;
+      $('#fConf').value = ''; $('#fAgree').checked = false;
+      renderResults();
+    };
+  }
 
   const top = list[0];
   state.shown = list.slice(0, 300);
