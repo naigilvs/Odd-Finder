@@ -58,6 +58,15 @@ Next to the market's win chance, each moneyline, spread and total in the NFL, NB
 
 Bets get a **Market + stats agree** badge when both opinions say the chance of winning is higher than FanDuel's price implies. The stats don't know about injuries or news, so treat them as a check on the market rather than a replacement. Player props, soccer and college sports aren't covered by the stats yet.
 
+### NBA player props
+
+Player points, rebounds and assists in the NBA also get a stats opinion (`props_stats.py`):
+
+- **Expected stat** = the player's expected minutes × his per-minute rate (both from recent games, newer games counting more) × how much of that stat the opponent allows compared with an average team.
+- **Chance of going over** comes from how far real results landed from the prediction in past games.
+- **Data:** each game's box score from ESPN's free game summaries, saved in `data/` and downloaded once.
+- **Honest gate:** tuned on last season, tested on this season at lines like the sportsbooks' (the player's recent average). A stat is only used if it beats both a coin flip and the player's recent hit rate. On this season it did for points (+2.7%), rebounds (+3.0%) and assists (+3.0%), but not 3-pointers, which stay on the market opinion. The test reruns every time the model updates, so a stat switches itself off if it stops passing.
+
 ## More bets
 
 The **More bets** switch at the top opens a separate section for alternate lines, team totals, halves/quarters/periods, over/under player props and yes/no props (anytime touchdown, double-double, home run…). Nothing there uses credits until you ask:

@@ -697,7 +697,7 @@ def demo_events(sport, target, include_props):
     return events
 
 
-CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py"]
+CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py", ROOT / "props_stats.py"]
 _started_with = {f: f.stat().st_mtime for f in CODE_FILES if f.exists()}
 
 

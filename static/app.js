@@ -325,7 +325,7 @@ async function loadStats(fromTimer) {
   let changed = false;
   try {
     const items = rows.map(r => ({ key: statKey(r), sport_key: r.sport_key, market: r.market, outcome: r.outcome,
-      point: r.point, home: r.home_team, away: r.away_team, team: r.team_total_for, fair_prob: r.fair_prob }));
+      point: r.point, home: r.home_team, away: r.away_team, team: r.team_total_for, player: r.player, fair_prob: r.fair_prob }));
     const res = await (await fetch('/api/stats', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }) })).json();
     changed = Object.keys(res.stats || {}).length > 0;
@@ -343,6 +343,16 @@ async function loadAccuracy() {
     const leagues = await getJSON('/api/accuracy');
     box.innerHTML = (state.cfg.demo ? '<p class="muted">Demo mode: the stats shown on bets are made up, but this report comes from real past games.</p>' : '') +
       '<div class="acc-grid">' + leagues.map(lg => {
+        if (lg.props) {
+          const pr = lg.props;
+          if (pr.status !== 'ready') return `<div class="acc"><h4>${esc(lg.league)}</h4><p class="muted">${pr.status === 'error' ? esc(pr.error || '') : 'Downloading box scores…'}</p></div>`;
+          const rows = Object.entries(pr.stats).map(([name, r]) => `<tr><td>${esc(name)}</td><td class="n">${r.bets}</td>
+            <td class="n">${r.vs_hit_rate != null ? signed(r.vs_hit_rate, 1) : '–'}</td><td class="n">${r.usable ? 'Used' : 'Not used'}</td></tr>`).join('');
+          return `<div class="acc"><h4>${esc(lg.league)}</h4>
+            <p>Tested on this season's games, each predicted before it was played, at lines like the sportsbooks' (the player's recent average). Compared with simply using the player's hit rate over that line in his last 10 games:</p>
+            <table><tr><th>Stat</th><th class="n">Bets</th><th class="n">Better by</th><th class="n"></th></tr>${rows}</table>
+            <p class="${Object.values(pr.stats).some(r => r.usable) ? 'ok' : 'warn'}">Only stats that beat both a coin flip and the hit rate are used.</p></div>`;
+        }
         const r = lg.report;
         if (!r) {
           const msg = lg.status === 'error' ? `Couldn't load past results: ${esc(lg.error || '')}` : 'Downloading past results…';
@@ -359,7 +369,8 @@ async function loadAccuracy() {
           <p class="${used.length ? 'ok' : 'warn'}">${used.length ? 'Used for ' + used.map(u => names[u]).join(', ') : 'Not used yet: not enough reliable results this season'}</p>
         </div>`;
       }).join('') + '</div>';
-    if (leagues.some(lg => !lg.report && lg.status !== 'error')) setTimeout(() => { if ($('#accBox').open) loadAccuracy(); }, 5000);
+    const loading = lg => lg.props ? !['ready', 'error'].includes(lg.props.status) : (!lg.report && lg.status !== 'error');
+    if (leagues.some(loading)) setTimeout(() => { if ($('#accBox').open) loadAccuracy(); }, 5000);
   } catch (e) {
     box.innerHTML = `<p class="muted">${esc(e.message)}</p>`;
   }
@@ -497,6 +508,10 @@ function explain(r) {
   if (hasStats) {
     if (s.prob > r.book_prob) good.push(`Past results agree: the stats give it a ${pct(s.prob)} chance, also above the ${pct(r.book_prob)} the price implies.`);
     else risk.push(`Past results disagree: the stats give it only ${pct(s.prob)}, below the ${pct(r.book_prob)} the price implies.`);
+    if (s.expected_stat != null && r.point != null) {
+      const leans = (r.outcome === 'Over') === (s.expected_stat > r.point);
+      (leans ? good : risk).push(`From ${r.player}'s recent games, minutes and the opponent's defense, the stats expect about ${s.expected_stat} ${s.stat_name}, against a line of ${r.point}.`);
+    }
     if (s.expected_total != null && r.point != null) {
       const unit = unitFor(r.sport_key);
       const leans = (r.outcome === 'Over') === (s.expected_total > r.point);

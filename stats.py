@@ -517,6 +517,8 @@ def warm_up():
     """Start loading every league in the background (called when the app starts)."""
     for lg in _leagues.values():
         lg.refresh_if_stale()
+    import props_stats
+    props_stats.LIVE.refresh_if_stale()
 
 
 _last_results_refresh = {}
@@ -558,8 +560,16 @@ def find_final_score(sport_key, home, away, start_iso, refresh=False):
 
 def predict_many(items):
     """items: [{key, sport_key, market, outcome, point, home, away}] -> ({key: result}, pending)"""
+    import props_stats                            # here, not at the top: props_stats imports this file
     results, pending = {}, 0
     for it in items[:2000]:
+        if it.get("sport_key") == props_stats.SPORT and it.get("market") in props_stats.STATS:
+            res = props_stats.LIVE.predict(it)
+            if res == "pending":
+                pending += 1
+            elif res:
+                results[it["key"]] = res
+            continue
         lg = _leagues.get(it.get("sport_key"))
         if not lg:
             results[it["key"]] = {"reason": "Stats aren't available for this league yet"}
@@ -579,7 +589,8 @@ def predict_many(items):
 
 
 def accuracy():
-    out = []
+    import props_stats
+    out = [{"sport_key": "player_props", "league": "NBA player props", "props": props_stats.LIVE.accuracy()}]
     for key, lg in _leagues.items():
         lg.refresh_if_stale()
         out.append({"sport_key": key, "league": lg.cfg["name"], "status": lg.status,
