@@ -113,5 +113,66 @@ class SeasonCarryOver(unittest.TestCase):
         self.assertAlmostEqual(m.elo_diff("Good", "Bad", neutral=True), full * m.carry)
 
 
+class Soccer(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        rng = random.Random(3)
+        strength = {"Strong FC": 2.2, "Mid Town": 1.3, "Weak Rovers": 0.7, "Average United": 1.3}
+        cls.m = stats.SoccerModel(half_life=20, draw=0.1)
+        teams = list(strength)
+        for i in range(400):
+            h, a = rng.sample(teams, 2)
+            hs = sum(1 for _ in range(10) if rng.random() < strength[h] * 1.1 / 10)
+            as_ = sum(1 for _ in range(10) if rng.random() < strength[a] * 0.9 / 10)
+            cls.m.play({"home": h, "away": a, "season": 2026, "hs": hs, "as": as_})
+
+    def test_chances_add_up_and_favor_the_stronger_team(self):
+        home, draw, away = self.m.outcome_probs(self.m.scores(*self.m.expected("Strong FC", "Weak Rovers")))
+        self.assertAlmostEqual(home + draw + away, 1)
+        self.assertGreater(home, 0.6)
+        self.assertGreater(home, away)
+
+    def test_half_goal_spread_equals_winning(self):
+        grid = self.m.scores(*self.m.expected("Mid Town", "Weak Rovers"))
+        self.assertAlmostEqual(stats.cover_prob(grid, -0.5, home_side=True), self.m.outcome_probs(grid)[0])
+
+    def test_totals(self):
+        grid = self.m.scores(1.5, 1.2)
+        self.assertGreater(stats.over_prob(grid, 1.5), stats.over_prob(grid, 3.5))
+        self.assertAlmostEqual(stats.over_prob(grid, 2.5) + (1 - stats.over_prob(grid, 2.5)), 1)
+
+    def test_draw_boost_raises_draws(self):
+        plain = stats.SoccerModel(draw=0.0).scores(1.4, 1.1)
+        boosted = stats.SoccerModel(draw=0.3).scores(1.4, 1.1)
+        self.assertGreater(stats.SoccerModel.outcome_probs(boosted)[1], stats.SoccerModel.outcome_probs(plain)[1])
+
+    def test_quarter_goal_lines_are_recognized(self):
+        self.assertTrue(stats._quarter_line(-0.25))
+        self.assertTrue(stats._quarter_line(0.75))
+        self.assertFalse(stats._quarter_line(-1.5))
+        self.assertFalse(stats._quarter_line(2.0))
+
+
+class ResultMatching(unittest.TestCase):
+    """Nickname-only matches must never mix up e.g. Manchester United and Newcastle United."""
+
+    def setUp(self):
+        self.lg = stats._leagues["soccer_epl"]
+        self.saved = self.lg.store.games
+        self.lg.store.games = lambda: [
+            {"id": "1", "date": "2026-11-22T15:00Z", "season": 2026, "home": "Manchester United", "away": "Arsenal FC", "hs": 2, "as": 0, "neutral": False},
+            {"id": "2", "date": "2026-11-22T15:00Z", "season": 2026, "home": "Newcastle United", "away": "Arsenal Reserves", "hs": 0, "as": 3, "neutral": False},
+        ]
+
+    def tearDown(self):
+        self.lg.store.games = self.saved
+
+    def test_exact_names_win(self):
+        self.assertEqual(stats.find_final_score("soccer_epl", "Manchester United", "Arsenal FC", "2026-11-22T15:00:00Z"), (2, 0))
+
+    def test_ambiguous_nicknames_give_no_answer(self):
+        self.assertIsNone(stats.find_final_score("soccer_epl", "Man United", "Arsenal", "2026-11-22T15:00:00Z"))
+
+
 if __name__ == "__main__":
     unittest.main()

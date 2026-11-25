@@ -52,7 +52,7 @@ class Grading(unittest.TestCase):
         self.assertTrue(picks.auto_gradable(pick(market="alternate_totals")))
         self.assertFalse(picks.auto_gradable(pick(market="spreads_h1")))                 # part of a game
         self.assertFalse(picks.auto_gradable(pick(market="player_points", player="P")))   # player prop
-        self.assertFalse(picks.auto_gradable(pick(sport_key="soccer_epl")))              # league not covered
+        self.assertFalse(picks.auto_gradable(pick(sport_key="soccer_netherlands_eredivisie")))   # league not covered
 
 
 class Store(unittest.TestCase):
@@ -300,6 +300,15 @@ class PostponedGames(unittest.TestCase):
         later = datetime.now(timezone.utc) + timedelta(days=5)
         track.grade_pending(refresh=False, find=lambda *a, **k: None, find_stat=lambda *a, **k: None, now=later)
         self.assertEqual(track.all(), [])
+
+
+class SoccerGrading(unittest.TestCase):
+    def test_what_is_graded_automatically(self):
+        epl = pick(sport_key="soccer_epl", outcome="Draw")
+        self.assertTrue(picks.auto_gradable(epl))
+        self.assertEqual(picks.grade(epl, 1, 1), "won")
+        self.assertFalse(picks.auto_gradable(pick(sport_key="soccer_epl", market="spreads", point=-0.25)))   # split result
+        self.assertFalse(picks.auto_gradable(pick(sport_key="soccer_uefa_champs_league")))                 # extra time
 
 
 if __name__ == "__main__":

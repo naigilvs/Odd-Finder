@@ -58,6 +58,12 @@ Next to the market's win chance, each moneyline, spread and total in the NFL, NB
 
 Bets get a **Market + stats agree** badge when both opinions say the chance of winning is higher than FanDuel's price implies. The stats don't know about injuries or news, so treat them as a check on the market rather than a replacement. Player props, soccer and college sports aren't covered by the stats yet.
 
+### Soccer
+
+The EPL, La Liga, Serie A, Bundesliga and Ligue 1 get a stats opinion from a **goals model** instead of team ratings, because draws are common: each team has an attack and a defense strength (updated after every match), expected goals = league average × attack × the opponent's defense, and the chance of every score follows from that (with a small draw boost tuned on last season). It covers win/draw/loss, goal spreads and totals, but not quarter-goal lines (−0.25, +0.75).
+
+Tested on this season's matches against simple base rates, results were predicted 3–14% better in every league and over/under 2.5 goals 1–5% better, so all five are used. Samples are still small (76–115 matches per league). The Champions League has too few matches per team to test (22), so it stays on the market opinion. Domestic league results are graded automatically; Champions League results and quarter-goal lines aren't (extra time and split results), so you mark those. Soccer player props stay market-only.
+
 ### Player props (NBA, NHL, NFL)
 
 Player props also get a stats opinion where it has proven itself (`props_stats.py`):

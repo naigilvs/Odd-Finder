@@ -368,7 +368,11 @@ async function loadAccuracy() {
         const rows = (r.buckets || []).map(b =>
           `<tr><td>${esc(b.range)}</td><td class="n">${b.games}</td><td class="n">${pct(b.actual)}</td></tr>`).join('');
         return `<div class="acc"><h4>${esc(lg.league)}</h4>
-          <p>Tested on <b>${r.games}</b> games from this season, each predicted before it was played. Picked the winner <b>${pct(r.picked_winner || 0, 0)}</b> of the time.</p>
+          ${r.kind === 'soccer'
+            ? (r.picked_winner != null
+              ? `<p>Tested on <b>${r.games}</b> matches from this season, each predicted before it was played. Picked the right result (win, draw or loss) <b>${pct(r.picked_winner, 0)}</b> of the time. Compared with simple base rates (how often home teams win, draw, lose), results were <b>${signed(r.skill, 1)}</b> better predicted and over/under 2.5 goals <b>${signed(r.total_skill, 1)}</b>.</p>`
+              : `<p>Only <b>${r.games}</b> matches this season to test on, too few to judge, so this league stays on the market opinion.</p>`)
+            : `<p>Tested on <b>${r.games}</b> games from this season, each predicted before it was played. Picked the winner <b>${pct(r.picked_winner || 0, 0)}</b> of the time.</p>`}
           ${rows ? `<table><tr><th>When stats said</th><th class="n">Games</th><th class="n">Teams won</th></tr>${rows}</table>` : ''}
           ${r.spread_coverage != null ? `<p>The real margin landed inside the stats' likely range ${pct(r.spread_coverage, 0)} of the time, and the real total ${pct(r.total_coverage, 0)} of the time (aim: 80%).</p>` : ''}
           <p class="${used.length ? 'ok' : 'warn'}">${used.length ? 'Used for ' + used.map(u => names[u]).join(', ') : 'Not used yet: not enough reliable results this season'}</p>
@@ -1020,7 +1024,8 @@ document.querySelectorAll('#pTabs button').forEach(b => b.onclick = () => { PICK
 /* ---------------- Bot track record: log every gradable bet ---------------- */
 // Moneylines, spreads, totals and team totals in these leagues can be checked automatically
 // after the game, so every one the bot shows is logged (once per bet; rescans update it).
-const TRACK_LEAGUES = ['americanfootball_nfl', 'basketball_nba', 'icehockey_nhl', 'baseball_mlb'];
+const TRACK_LEAGUES = ['americanfootball_nfl', 'basketball_nba', 'icehockey_nhl', 'baseball_mlb',
+  'soccer_epl', 'soccer_spain_la_liga', 'soccer_italy_serie_a', 'soccer_germany_bundesliga', 'soccer_france_ligue_one'];
 const TRACK_MARKETS = ['h2h', 'spreads', 'totals', 'team_totals'];
 const TRACK = { sent: {}, timer: null };
 

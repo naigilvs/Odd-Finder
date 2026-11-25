@@ -49,8 +49,11 @@ def auto_gradable(pick):
     if pick.get("player"):
         return is_gradable_prop(pick)
     m = base_market(pick.get("market") or "")
-    return (pick.get("sport_key") in stats.LEAGUES and m in AUTO_MARKETS
-            and not m.endswith(PERIOD_ENDINGS))
+    point = pick.get("point")
+    quarter = point is not None and abs(point * 2 - round(point * 2)) > 1e-9   # -0.25 / +0.75: split results
+    league = stats.LEAGUES.get(pick.get("sport_key"))
+    return (league is not None and not league.get("cup") and m in AUTO_MARKETS
+            and not m.endswith(PERIOD_ENDINGS) and not quarter)
 
 
 def grade_prop(pick, value):

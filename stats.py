@@ -43,6 +43,16 @@ LEAGUES = {
                       "k": 6, "home": 33, "carry": 0.7, "half_life": 15},
     "baseball_mlb": {"name": "MLB", "path": "baseball/mlb", "by": "day",
                      "k": 4, "home": 24, "carry": 0.67, "half_life": 30},
+    # Soccer uses a goals model instead of Elo ratings (see SoccerModel): draws are common.
+    "soccer_epl": {"name": "EPL", "path": "soccer/eng.1", "by": "day", "kind": "soccer", "carry": 0.7},
+    "soccer_spain_la_liga": {"name": "La Liga", "path": "soccer/esp.1", "by": "day", "kind": "soccer", "carry": 0.7},
+    "soccer_italy_serie_a": {"name": "Serie A", "path": "soccer/ita.1", "by": "day", "kind": "soccer", "carry": 0.7},
+    "soccer_germany_bundesliga": {"name": "Bundesliga", "path": "soccer/ger.1", "by": "day", "kind": "soccer", "carry": 0.7},
+    "soccer_france_ligue_one": {"name": "Ligue 1", "path": "soccer/fra.1", "by": "day", "kind": "soccer", "carry": 0.7},
+    # A cup: knockout matches can go to extra time, which ESPN's final score includes but
+    # bets (settled on 90 minutes) don't, so its results aren't graded automatically.
+    "soccer_uefa_champs_league": {"name": "Champions League", "path": "soccer/uefa.champions", "by": "day",
+                                  "kind": "soccer", "carry": 0.7, "cup": True},
 }
 REFRESH_SECONDS = 6 * 3600     # rebuild a league's model at most every 6 hours
 MIN_TEST_GAMES = 30            # fewer test games than this -> not enough to judge accuracy
@@ -74,12 +84,12 @@ def espn_get(path, **params):
     raise last_err
 
 
-def parse_games(feed):
+def parse_games(feed, any_season_type=False):
     """Pull finished regular-season and playoff games out of one scoreboard response."""
     games = []
     for e in feed.get("events", []):
         season = e.get("season", {})
-        if season.get("type") not in (2, 3):          # skip preseason / all-star etc.
+        if not any_season_type and season.get("type") not in (2, 3):   # skip preseason / all-star etc.
             continue
         comp = (e.get("competitions") or [{}])[0]
         if not comp.get("status", e.get("status", {})).get("type", {}).get("completed"):
@@ -166,7 +176,8 @@ class ResultsStore:
         def fetch(unit):
             uid, params, ends = unit
             try:
-                games = parse_games(espn_get(self.cfg["path"], **params))
+                games = parse_games(espn_get(self.cfg["path"], **params),
+                                    any_season_type=self.cfg.get("kind") == "soccer")
             except Exception as e:
                 self.failed += 1
                 self.last_error = f"{type(e).__name__}: {e}"
@@ -320,6 +331,126 @@ def settled(entries, min_games=5):
     return [e for e in entries if e["games_h"] >= min_games and e["games_a"] >= min_games]
 
 
+# --------------------------------------------------------------------------- soccer: goals model
+
+MAX_GOALS = 10
+
+
+def poisson(k, lam):
+    return math.exp(-lam) * lam ** k / math.factorial(k)
+
+
+class SoccerModel:
+    """Each team has an attack and a defense strength (1 = league average), updated after
+    every match. Expected goals = league average x attack x opponent's defense; the chance
+    of every score follows from that, with a small tuned boost for draws."""
+
+    def __init__(self, half_life=20, draw=0.0, carry=0.7):
+        self.a = 1 - 0.5 ** (1 / half_life)
+        self.draw, self.carry = draw, carry
+        self.att, self.dfn, self.season_of = {}, {}, {}
+        self.home_avg, self.away_avg = 1.5, 1.2        # goals per game, learned as we go
+        self.recent, self.log = {}, []
+        self.latest_season = 0
+
+    def _ratings(self, team, season=None):
+        att, dfn = self.att.get(team, 1.0), self.dfn.get(team, 1.0)
+        last = self.season_of.get(team)
+        if last is not None and last < (season or self.latest_season):   # new season: toward average
+            att, dfn = 1 + (att - 1) * self.carry, 1 + (dfn - 1) * self.carry
+        return att, dfn
+
+    def expected(self, home, away, season=None):
+        ah, dh = self._ratings(home, season)
+        aa, da = self._ratings(away, season)
+        return self.home_avg * ah * da, self.away_avg * aa * dh
+
+    def scores(self, lh, la):
+        """Chance of every score up to MAX_GOALS each, with the draw boost, summing to 1."""
+        ph = [poisson(i, lh) for i in range(MAX_GOALS + 1)]
+        pa = [poisson(j, la) for j in range(MAX_GOALS + 1)]
+        grid = [[ph[i] * pa[j] * (1 + self.draw if i == j else 1) for j in range(MAX_GOALS + 1)]
+                for i in range(MAX_GOALS + 1)]
+        total = sum(map(sum, grid))
+        return [[x / total for x in row] for row in grid]
+
+    @staticmethod
+    def outcome_probs(grid):
+        n = len(grid)
+        home = sum(grid[i][j] for i in range(n) for j in range(n) if i > j)
+        draw = sum(grid[i][i] for i in range(n))
+        return home, draw, 1 - home - draw
+
+    def form(self, team, n=10):
+        res = self.recent.get(team, [])[-n:]
+        if not res:
+            return None
+        return f"{res.count('W')}-{res.count('L')}-{res.count('D')}"
+
+    def play(self, g):
+        h, a, season = g["home"], g["away"], g["season"]
+        self.latest_season = max(self.latest_season, season)
+        for t in (h, a):                                  # new season: pull ratings toward average
+            if t in self.season_of and self.season_of[t] != season:
+                self.att[t], self.dfn[t] = self._ratings(t, season)
+            self.season_of[t] = season
+        lh, la = self.expected(h, a, season)
+        ph, pd, pa = self.outcome_probs(self.scores(lh, la))
+        hs, as_ = g["hs"], g["as"]
+        self.log.append({"season": season, "p": (ph, pd, pa), "lam": (lh, la), "hs": hs, "as": as_,
+                         "games_h": len(self.recent.get(h, [])), "games_a": len(self.recent.get(a, []))})
+        # learn: how many goals each side scored compared with what was expected
+        a_ = self.a
+        att_h, dfn_h = self.att.get(h, 1.0), self.dfn.get(h, 1.0)
+        att_a, dfn_a = self.att.get(a, 1.0), self.dfn.get(a, 1.0)
+        self.att[h] = att_h + a_ * (hs / max(self.home_avg * dfn_a, 0.1) - att_h)
+        self.dfn[a] = dfn_a + a_ * (hs / max(self.home_avg * att_h, 0.1) - dfn_a)
+        self.att[a] = att_a + a_ * (as_ / max(self.away_avg * dfn_h, 0.1) - att_a)
+        self.dfn[h] = dfn_h + a_ * (as_ / max(self.away_avg * att_a, 0.1) - dfn_h)
+        self.home_avg += a_ / 10 * (hs - self.home_avg)
+        self.away_avg += a_ / 10 * (as_ - self.away_avg)
+        for t, res in ((h, "W" if hs > as_ else "L" if hs < as_ else "D"), (a, "W" if as_ > hs else "L" if as_ < hs else "D")):
+            self.recent.setdefault(t, []).append(res)
+            self.recent[t] = self.recent[t][-10:]
+
+
+def _soccer_loss(entries):
+    total = 0.0
+    for e in entries:
+        i = 0 if e["hs"] > e["as"] else 1 if e["hs"] == e["as"] else 2
+        total -= math.log(max(e["p"][i], 1e-9))
+    return total / max(len(entries), 1)
+
+
+def over_prob(grid, line, team=None):
+    """Chance the total (or one team's goals: team 0 = home, 1 = away) goes over `line`,
+    leaving out pushes on whole-number lines."""
+    n = len(grid)
+    over = under = 0.0
+    for i in range(n):
+        for j in range(n):
+            x = i + j if team is None else (i if team == 0 else j)
+            if x > line:
+                over += grid[i][j]
+            elif x < line:
+                under += grid[i][j]
+    return over / (over + under) if over + under else 0.5
+
+
+def cover_prob(grid, point, home_side):
+    """Chance a side covers a goal spread (half or whole lines; pushes left out)."""
+    n = len(grid)
+    win = lose = 0.0
+    for i in range(n):
+        for j in range(n):
+            margin = (i - j) if home_side else (j - i)
+            if margin + point > 0:
+                win += grid[i][j]
+            elif margin + point < 0:
+                lose += grid[i][j]
+    return win / (win + lose) if win + lose else 0.5
+
+
 class LeagueStats:
     """Downloads results, tunes and tests the model, and answers questions about upcoming games."""
 
@@ -346,6 +477,8 @@ class LeagueStats:
             games = self.store.update()
             if len(games) < 50:
                 raise RuntimeError("Not enough finished games found yet.")
+            if self.cfg.get("kind") == "soccer":
+                return self._build_soccer(games)
             seasons = sorted({g["season"] for g in games})
             test_season = seasons[-1]
             # Tune on last season: pick the settings that predicted it best.
@@ -389,6 +522,76 @@ class LeagueStats:
                 self.status = "ready" if self.model else "error"
                 self.error = str(e)
                 self.built_at = time.time() - REFRESH_SECONDS + 600   # try again in 10 minutes
+
+    def _build_soccer(self, games):
+        seasons = sorted({g["season"] for g in games})
+        test_season = seasons[-1]
+        settled_ = lambda log: [e for e in log if e["games_h"] >= 5 and e["games_a"] >= 5]
+        best = None
+        for hl in (10, 20, 40):
+            for draw in (0.0, 0.1, 0.2, 0.3):
+                m = SoccerModel(hl, draw, self.cfg["carry"])
+                for g in games:
+                    if g["season"] < test_season:
+                        m.play(g)
+                score = _soccer_loss(settled_(m.log))
+                if best is None or score < best[0]:
+                    best = (score, hl, draw)
+        _, hl, draw = best if len(seasons) > 1 else (0, 20, 0.1)
+        model = SoccerModel(hl, draw, self.cfg["carry"])
+        for g in games:
+            model.play(g)
+        train = settled_([e for e in model.log if e["season"] < test_season]) or settled_(model.log)
+        test = settled_([e for e in model.log if e["season"] == test_season])
+        report = self._soccer_accuracy(model, train, test, test_season)
+        teams = {normalize(t): t for t in model.att}
+        with self.lock:
+            self.model, self.report, self.teams = model, report, teams
+            self.status, self.error = "ready", None
+
+    def _soccer_accuracy(self, model, train, test, test_season):
+        """This season's matches, each predicted before it was played, against simple base
+        rates from last season (how often home teams win, draw, lose; how often 2.5 goals go over)."""
+        out = {"league": self.cfg["name"], "season": test_season, "games": len(test), "kind": "soccer"}
+        if len(test) < MIN_TEST_GAMES or not train:
+            out["usable"] = {"moneyline": False, "spread": False, "total": False}
+            return out
+        res = lambda e: 0 if e["hs"] > e["as"] else 1 if e["hs"] == e["as"] else 2
+        base = [sum(1 for e in train if res(e) == k) / len(train) for k in range(3)]
+        ll_model = _soccer_loss(test)
+        ll_base = -sum(math.log(base[res(e)]) for e in test) / len(test)
+        picked = sum(1 for e in test if max(range(3), key=lambda k: e["p"][k]) == res(e)) / len(test)
+        over_base = sum(1 for e in train if e["hs"] + e["as"] > 2.5) / len(train)
+
+        def ll(p, y):
+            p = min(max(p, 1e-6), 1 - 1e-6)
+            return -(y * math.log(p) + (1 - y) * math.log(1 - p))
+        tot_model = tot_base = 0.0
+        for e in test:
+            y = 1.0 if e["hs"] + e["as"] > 2.5 else 0.0
+            p_over = over_prob(model.scores(*e["lam"]), 2.5)
+            tot_model += ll(p_over, y)
+            tot_base += ll(over_base, y)
+        buckets = []
+        for lo, hi in ((0.3, 0.45), (0.45, 0.6), (0.6, 0.75), (0.75, 1.01)):
+            sel = []
+            for e in test:
+                k = 0 if e["p"][0] >= e["p"][2] else 2           # the favorite
+                if lo <= e["p"][k] < hi:
+                    sel.append((e["p"][k], res(e) == k))
+            if len(sel) >= 10:
+                buckets.append({"range": f"{round(lo * 100)}–{min(round(hi * 100), 100)}%", "games": len(sel),
+                                "predicted": round(sum(x for x, _ in sel) / len(sel), 3),
+                                "actual": round(sum(1 for _, w in sel if w) / len(sel), 3)})
+        skill = 1 - ll_model / ll_base
+        total_skill = 1 - tot_model / tot_base
+        out.update({"picked_winner": round(picked, 3), "skill": round(skill, 3), "total_skill": round(total_skill, 3),
+                    "buckets": buckets,
+                    "usable": {"moneyline": skill > 0, "spread": skill > 0, "total": total_skill > 0}})
+        return out
+
+    def _predict_soccer(self, home, away, item, usable):
+        return _predict_soccer_impl(self, home, away, item, usable)
 
     def _accuracy(self, model, train, test, test_season):
         """How well the model did on this season's games, each predicted before it was played."""
@@ -450,6 +653,8 @@ class LeagueStats:
             return {"reason": "Team not found in past results"}
         usable = report["usable"]
         market, outcome, point = item.get("market") or "", item.get("outcome"), item.get("point")
+        if self.cfg.get("kind") == "soccer":
+            return self._predict_soccer(home, away, item, usable)
         if market.startswith("alternate_"):      # alternate lines: same model, different number
             market = market[len("alternate_"):]
         diff = m.elo_diff(home, away)
@@ -505,7 +710,57 @@ class LeagueStats:
 
 
 # Old or alternate team names the odds feed may use -> ESPN's current name (normalized).
-ALIASES = {"utah hockey club": "utah mammoth", "oakland athletics": "athletics"}
+ALIASES = {
+    "utah hockey club": "utah mammoth", "oakland athletics": "athletics",
+    # soccer: the odds feed's name -> ESPN's
+    "athletic bilbao": "athletic club", "deportivo la coruna": "deportivo", "elche cf": "elche",
+    "atalanta bc": "atalanta", "1 fc koln": "fc cologne", "fsv mainz 05": "mainz",
+    "sc paderborn": "sc paderborn 07", "le havre": "le havre ac", "rennes": "stade rennais",
+    "inter milan": "internazionale", "slavia praha": "slavia prague", "sporting lisbon": "sporting cp",
+}
+
+
+def _quarter_line(point):
+    return point is not None and abs(point * 2 - round(point * 2)) > 1e-9      # e.g. -0.25, +0.75
+
+
+def _predict_soccer_impl(self, home, away, item, usable):
+    m = self.model
+    market = (item.get("market") or "").replace("alternate_", "", 1)
+    outcome, point = item.get("outcome"), item.get("point")
+    out = {"form_home": m.form(home), "form_away": m.form(away)}
+    grid = m.scores(*m.expected(home, away))
+    if market == "h2h":
+        if not usable["moneyline"]:
+            return dict(out, reason="Stats weren't accurate enough for this league's results")
+        ph, pd, pa = m.outcome_probs(grid)
+        prob = ph if outcome == item.get("home") else pa if outcome == item.get("away") else pd if outcome == "Draw" else None
+        if prob is None:
+            return dict(out, reason="Team not found in this match")
+    elif market in ("totals", "team_totals", "spreads") and point is not None:
+        if _quarter_line(point):
+            return dict(out, reason="Stats don't cover quarter-goal lines")
+        if market == "spreads":
+            if not usable["spread"]:
+                return dict(out, reason="Stats weren't accurate enough for this league's spreads")
+            prob = cover_prob(grid, point, home_side=outcome == item.get("home"))
+        else:
+            if not usable["total"]:
+                return dict(out, reason="Stats weren't accurate enough for this league's goal totals")
+            team = None
+            if market == "team_totals":
+                t = self.match(item.get("team"))
+                team = 0 if t == home else 1 if t == away else None
+                if team is None:
+                    return dict(out, reason="Team not found in past results")
+            p_over = over_prob(grid, point, team)
+            prob = p_over if outcome == "Over" else 1 - p_over
+        lh, la = m.expected(home, away)
+        out["expected_total"] = round(lh + la, 2)
+    else:
+        return dict(out, reason="Stats don't cover this bet type yet")
+    out["prob"] = round(prob, 4)
+    return out
 
 
 def normalize(name):
@@ -559,14 +814,21 @@ def find_final_game(sport_key, home, away, start_iso, refresh=False):
         start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
     except (AttributeError, ValueError):
         return None
+    exact = lambda x, y: ALIASES.get(normalize(x), normalize(x)) == ALIASES.get(normalize(y), normalize(y))
+    nearby = []
     for g in reversed(lg.store.games()):
         when = datetime.fromisoformat(g["date"].replace("Z", "+00:00"))
-        if abs((when - start).total_seconds()) > 18 * 3600:
-            continue
-        if _same_team(home, g["home"]) and _same_team(away, g["away"]):
-            return g, False
-        if _same_team(home, g["away"]) and _same_team(away, g["home"]):   # listed the other way round
-            return g, True
+        if abs((when - start).total_seconds()) <= 18 * 3600:
+            nearby.append(g)
+    # Exact names first. A nickname-only match ("United") is used only if exactly one game
+    # fits, so e.g. Manchester United and Newcastle United are never mixed up.
+    for same in (exact, _same_team):
+        hits = [(g, False) for g in nearby if same(home, g["home"]) and same(away, g["away"])] + \
+               [(g, True) for g in nearby if same(home, g["away"]) and same(away, g["home"])]
+        if len(hits) == 1:
+            return hits[0]
+        if hits:
+            return None
     return None
 
 
