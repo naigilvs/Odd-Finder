@@ -77,6 +77,16 @@ def grade(pick, home_score, away_score):
     return None
 
 
+def clean(data):
+    """Keep only the known fields of a bet, with the right types."""
+    bet = {f: str(data[f])[:300] for f in TEXT_FIELDS if isinstance(data.get(f), (str, int, float))}
+    bet.update({f: float(data[f]) for f in NUMBER_FIELDS
+                if isinstance(data.get(f), (int, float)) and not isinstance(data.get(f), bool)})
+    if not all(bet.get(f) for f in ("event_id", "market", "selection", "start")) or "decimal" not in bet:
+        raise ValueError("That bet is missing details, so it can't be saved.")
+    return bet
+
+
 def _num(x):
     return f"{x:g}" if isinstance(x, (int, float)) else str(x)
 
@@ -101,10 +111,7 @@ class PickStore:
             return list(self.picks)
 
     def save(self, data, stake=None):
-        pick = {f: str(data[f])[:300] for f in TEXT_FIELDS if isinstance(data.get(f), (str, int, float))}
-        pick.update({f: float(data[f]) for f in NUMBER_FIELDS if isinstance(data.get(f), (int, float))})
-        if not all(pick.get(f) for f in ("event_id", "market", "selection", "start")) or "decimal" not in pick:
-            raise ValueError("That bet is missing details, so it can't be saved.")
+        pick = clean(data)
         with self.lock:
             for p in self.picks:          # saving the same bet twice keeps the first one
                 if (p["event_id"], p["market"], p["selection"]) == (pick["event_id"], pick["market"], pick["selection"]):
@@ -166,3 +173,111 @@ class PickStore:
             with self.lock:
                 self._write()
         return graded
+
+
+# --------------------------------------------------------------------------- bot track record
+
+TRACK_FILE = stats.DATA_DIR / "track.json"
+
+
+def _key(b):
+    return (b["event_id"], b["market"], b["selection"])
+
+
+class TrackStore(PickStore):
+    """Every bet the bot showed that can be graded automatically, logged before the game
+    and checked after it. Each bet is kept once (a rescan updates it to the latest price)."""
+
+    def __init__(self, path=TRACK_FILE):
+        super().__init__(path)
+
+    def _write(self):
+        self.path.parent.mkdir(exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.picks, separators=(",", ":")))   # compact: this file grows
+        tmp.replace(self.path)
+
+    def log(self, bets, now=None):
+        now = now or datetime.now(timezone.utc)
+        added = updated = 0
+        with self.lock:
+            index = {_key(b): b for b in self.picks}
+            for raw in bets[:3000]:
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    bet = clean(raw)
+                    starts = datetime.fromisoformat(bet["start"].replace("Z", "+00:00"))
+                except (ValueError, KeyError):
+                    continue
+                if not auto_gradable(bet) or starts <= now:      # only bets seen before the game
+                    continue
+                bet["agree"] = raw.get("agree") is True
+                old = index.get(_key(bet))
+                if old:
+                    if old["status"] == "pending":
+                        old.update(bet)
+                        old["last_seen"] = now.isoformat()
+                        updated += 1
+                    continue
+                bet.update({"id": uuid.uuid4().hex[:12], "first_seen": now.isoformat(), "last_seen": now.isoformat(),
+                            "status": "pending", "auto": True})
+                self.picks.append(bet)
+                index[_key(bet)] = bet
+                added += 1
+            if added or updated:
+                self._write()
+        return added, updated
+
+    def clear(self):
+        with self.lock:
+            self.picks = []
+            self._write()
+
+
+CHANCE_BUCKETS = [(0, 0.3), (0.3, 0.4), (0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 1.01)]
+
+
+def _block(bets):
+    """Record and $100-a-bet profit for a group of finished bets."""
+    decided = [b for b in bets if b["status"] != "push"]
+    wins = sum(1 for b in decided if b["status"] == "won")
+    expected = sum(b.get("chance", b.get("fair_prob", 0)) for b in decided)
+    profit = sum(100 * (b["decimal"] - 1) if b["status"] == "won" else -100 if b["status"] == "lost" else 0 for b in bets)
+    return {"bets": len(bets), "wins": wins, "losses": len(decided) - wins, "pushes": len(bets) - len(decided),
+            "win_rate": wins / len(decided) if decided else None,
+            "expected": expected / len(decided) if decided else None,
+            "profit": round(profit, 2), "roi": profit / (100 * len(bets)) if bets else None}
+
+
+def track_summary(bets, since=None):
+    """How the bot's predictions turned out, for bets starting on or after `since` (ISO time)."""
+    sel = [b for b in bets if not since or b["start"] >= since]
+    done = [b for b in sel if b["status"] in ("won", "lost", "push")]
+
+    def group(key_fn, label_fn=lambda k: k):
+        groups = {}
+        for b in done:
+            groups.setdefault(key_fn(b), []).append(b)
+        rows = [dict(_block(v), name=label_fn(k)) for k, v in groups.items()]
+        return sorted(rows, key=lambda r: -r["bets"])
+
+    calibration = []
+    for lo, hi in CHANCE_BUCKETS:
+        g = [b for b in done if lo <= b.get("chance", b.get("fair_prob", 0)) < hi]
+        if g:
+            calibration.append(dict(_block(g), name=f"{round(lo * 100)}–{min(round(hi * 100), 100)}%"))
+    recent = sorted(done, key=lambda b: b["start"], reverse=True)[:60]
+    return {
+        "tracked": len(sel), "pending": len(sel) - len(done), "settled": len(done),
+        "all": _block(done),
+        "value": _block([b for b in done if b.get("ev", 0) > 0]),
+        "agree": _block([b for b in done if b.get("agree")]),
+        "calibration": calibration,
+        "by_confidence": [r for lvl in ("High", "Medium", "Low") for r in group(lambda b: b.get("confidence") or "–") if r["name"] == lvl],
+        "by_league": group(lambda b: b.get("sport") or b["sport_key"]),
+        "by_type": group(lambda b: base_market(b["market"]),
+                         lambda k: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total", "team_totals": "Team total"}.get(k, k)),
+        "recent": [{k: b.get(k) for k in ("label", "selection", "event", "sport", "start", "american", "chance",
+                                           "confidence", "ev", "status", "final", "market_label")} for b in recent],
+    }

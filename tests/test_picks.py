@@ -140,3 +140,60 @@ class FinalScores(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrackRecord(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.track = picks.TrackStore(Path(self.dir.name) / "track.json")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_logs_gradable_bets_once_and_updates_them(self):
+        a, u = self.track.log([pick(start=FUTURE, decimal=2.2, agree=True),
+                               pick(start=FUTURE, market="player_points", player="P", selection="P Over 20.5"),  # not gradable
+                               pick(start=PAST, event_id="old"),                                               # already started
+                               "not a bet", {"selection": "missing fields"}])
+        self.assertEqual((a, u), (1, 0))
+        a, u = self.track.log([pick(start=FUTURE, decimal=2.4)])            # rescan with a new price
+        self.assertEqual((a, u), (0, 1))
+        bets = self.track.all()
+        self.assertEqual(len(bets), 1)
+        self.assertEqual(bets[0]["decimal"], 2.4)
+        self.assertFalse(bets[0]["agree"])                                  # latest scan wins
+        self.assertEqual(picks.TrackStore(self.track.path).all()[0]["decimal"], 2.4)   # saved to disk
+
+    def test_finished_bets_are_not_changed_by_rescans(self):
+        self.track.log([pick(start=FUTURE)])
+        self.track.picks[0]["status"] = "won"
+        self.assertEqual(self.track.log([pick(start=FUTURE, decimal=5.0)]), (0, 0))
+        self.assertEqual(self.track.all()[0]["decimal"], 2.2)
+
+    def test_grading_and_clearing(self):
+        self.track.log([pick(start=FUTURE)])
+        later = datetime.now(timezone.utc) + timedelta(days=3)
+        self.assertEqual(self.track.grade_pending(refresh=False, find=lambda *a, **k: (100, 90), now=later), 1)
+        self.assertEqual(self.track.all()[0]["status"], "won")
+        self.track.clear()
+        self.assertEqual(self.track.all(), [])
+
+    def test_summary(self):
+        def done(status, chance, ev, conf="High", agree=False, decimal=2.0, start="2026-11-20T00:00:00+00:00", **kw):
+            return dict(pick(start=start, decimal=decimal, chance=chance, ev=ev, confidence=conf, **kw),
+                        status=status, agree=agree)
+        bets = [done("won", 0.55, 0.05, agree=True), done("lost", 0.65, 0.02), done("won", 0.35, -0.03, conf="Low", decimal=3.0),
+                done("push", 0.5, 0.01), dict(pick(start=FUTURE), status="pending"),
+                done("won", 0.6, 0.1, start="2025-01-01T00:00:00+00:00")]
+        s = picks.track_summary(bets, since="2026-01-01T00:00:00+00:00")
+        self.assertEqual((s["tracked"], s["pending"], s["settled"]), (5, 1, 4))
+        self.assertEqual((s["all"]["wins"], s["all"]["losses"], s["all"]["pushes"]), (2, 1, 1))
+        self.assertAlmostEqual(s["all"]["win_rate"], 2 / 3)
+        self.assertAlmostEqual(s["all"]["expected"], (0.55 + 0.65 + 0.35) / 3)
+        self.assertEqual(s["all"]["profit"], 100 - 100 + 200 + 0)
+        self.assertEqual((s["value"]["bets"], s["value"]["profit"]), (3, 0))      # positive-value bets only
+        self.assertEqual((s["agree"]["bets"], s["agree"]["profit"]), (1, 100))
+        self.assertEqual([r["name"] for r in s["by_confidence"]], ["High", "Low"])
+        self.assertEqual([r["name"] for r in s["calibration"]], ["30–40%", "50–60%", "60–70%"])
+        self.assertEqual(s["by_type"][0]["name"], "Moneyline")
+        self.assertEqual(len(picks.track_summary(bets)["recent"]), 5)              # all time includes 2025

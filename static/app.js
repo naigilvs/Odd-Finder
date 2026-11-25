@@ -215,6 +215,7 @@ function renderResults(fresh) {
   $('#list').innerHTML = list.slice(0, 300).map((r, i) => betRow(r, i, 'main')).join('');
   loadImages();
   loadStats();
+  scheduleTrackLog();
 }
 
 // One bet in a list. `which` says which list it belongs to, so a click opens the right bet.
@@ -407,7 +408,7 @@ async function init() {
 $('#scan').onclick = () => { setStatus(''); scan(); };
 $('#props').onchange = renderScanButton;
 $('#changeBook').onclick = showStart;
-$('#home').onclick = e => { e.preventDefault(); state.tab = 'all'; renderAll(); };
+$('#home').onclick = e => { e.preventDefault(); showPage('find'); state.tab = 'all'; renderAll(); };
 ['#fMarket', '#fProb', '#fEv', '#sort', '#minBooks'].forEach(s => $(s).addEventListener('input', () => renderResults()));
 $('#fAgree').addEventListener('change', () => renderResults());
 $('#fConf').addEventListener('change', () => renderResults());
@@ -607,9 +608,7 @@ function showView(view) {
   document.querySelectorAll('.viewswitch button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === view)));
   $('#mainView').hidden = view !== 'main';
   $('#moreView').hidden = view !== 'more';
-  $('#picksView').hidden = view !== 'picks';
   if (view === 'more') enterMore();
-  if (view === 'picks') { renderPicks(); checkResults(); }
 }
 
 function enterMore() {
@@ -744,6 +743,7 @@ function renderMore() {
   $('#mEmpty').hidden = !$('#mEmpty').innerHTML;
   loadImages();
   loadStats();
+  scheduleTrackLog();
 }
 
 document.querySelectorAll('.viewswitch button').forEach(b => b.onclick = () => showView(b.dataset.view));
@@ -764,10 +764,11 @@ $('#toppick').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key 
 $('#betModal').addEventListener('click', e => { if (e.target === $('#betModal')) $('#betModal').close(); });
 
 /* ---------------- My picks ---------------- */
-const PICKS = { list: [], checking: false };
+const PICKS = { list: [], checking: false, tab: 'open' };
 const pickKey = r => `${r.event_id}|${r.market}|${r.selection}`;
 const savedPick = r => r && PICKS.list.find(p => pickKey(p) === pickKey(r));
-const dollars = x => (x < 0 ? '−$' : '$') + Math.abs(x).toFixed(2).replace(/\.00$/, '');
+const dollars = x => (x < 0 ? '−$' : '$') +
+  Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/\.00$/, '');
 const signedDollars = x => (x > 0 ? '+' : '') + dollars(x);
 
 function starButton(r) {
@@ -791,7 +792,8 @@ async function picksApi(body) {
   if (!r.ok || j.error) throw new Error(j.error || r.statusText);
   if (j.picks) PICKS.list = j.picks;
   const pending = PICKS.list.filter(p => p.status === 'pending').length;
-  $('#pickCount').textContent = PICKS.list.length ? (pending ? `${pending} open` : PICKS.list.length) : '';
+  $('#sideCount').textContent = pending ? `${pending} open` : '';
+  $('#menuCount').textContent = pending || '';
   return j;
 }
 
@@ -885,12 +887,14 @@ function renderPicks() {
     ${levels.map(([lvl, v]) => `<tr><td>${lvl}</td><td class="n">${v.picks}</td><td class="n">${pct(v.winRate, 0)}</td><td class="n">${pct(v.expectedRate, 0)}</td></tr>`).join('')}
     </table>` : '';
 
-  const f = $('#pfStatus').value;
-  const list = all.filter(p => !f || (f === 'settled' ? p.status !== 'pending' : p.status === f))
-    .sort((a, b) => (a.status === 'pending') !== (b.status === 'pending') ? (a.status === 'pending' ? -1 : 1)
-      : a.status === 'pending' ? a.start.localeCompare(b.start) : b.start.localeCompare(a.start));
-  $('#pShown').textContent = list.length ? `Showing ${list.length} of ${all.length}` : '';
-  $('#pFilters').hidden = !all.length;
+  const open = all.filter(p => p.status === 'pending');
+  const done = all.filter(p => p.status !== 'pending');
+  $('#pOpenN').textContent = open.length || '';
+  $('#pDoneN').textContent = done.length || '';
+  document.querySelectorAll('#pTabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === PICKS.tab)));
+  const list = PICKS.tab === 'open'
+    ? open.sort((a, b) => a.start.localeCompare(b.start))          // soonest first
+    : done.sort((a, b) => b.start.localeCompare(a.start));         // most recent first
   $('#pList').innerHTML = list.map(p => {
     const profit = p.status !== 'pending' && p.stake ? Calc.pickProfit(p, p.stake) : null;
     return `
@@ -910,7 +914,9 @@ function renderPicks() {
   }).join('');
   $('#pEmpty').innerHTML = !all.length
     ? '<div class="big" aria-hidden="true">☆</div><h3>No saved picks yet</h3><p>Click the ☆ next to any bet, or Save pick in its details, to keep track of it here.</p>'
-    : !list.length ? '<h3>No picks match this filter</h3>' : '';
+    : list.length ? ''
+    : PICKS.tab === 'open' ? '<h3>No unsettled picks</h3><p>Every pick you saved has a result. Find more bets to save.</p>'
+    : '<h3>No settled picks yet</h3><p>Picks move here once their game is over and the result is in.</p>';
   $('#pEmpty').hidden = !$('#pEmpty').innerHTML;
 }
 
@@ -936,7 +942,164 @@ $('#pList').addEventListener('change', async e => {
   renderPicks();
 });
 $('#pCheck').onclick = () => checkResults();
-$('#pfStatus').addEventListener('change', renderPicks);
+document.querySelectorAll('#pTabs button').forEach(b => b.onclick = () => { PICKS.tab = b.dataset.tab; renderPicks(); });
+
+/* ---------------- Bot track record: log every gradable bet ---------------- */
+// Moneylines, spreads, totals and team totals in these leagues can be checked automatically
+// after the game, so every one the bot shows is logged (once per bet; rescans update it).
+const TRACK_LEAGUES = ['americanfootball_nfl', 'basketball_nba', 'icehockey_nhl', 'baseball_mlb'];
+const TRACK_MARKETS = ['h2h', 'spreads', 'totals', 'team_totals'];
+const TRACK = { sent: {}, timer: null };
+
+function trackable(r) {
+  return TRACK_LEAGUES.includes(r.sport_key) && !r.player && new Date(r.start) > Date.now()
+    && TRACK_MARKETS.includes(r.market.replace(/^alternate_/, ''));
+}
+
+function scheduleTrackLog() {
+  clearTimeout(TRACK.timer);
+  TRACK.timer = setTimeout(logTrack, 2000);   // wait for stats to settle, then log in one go
+}
+
+async function logTrack() {
+  const rows = Object.values(state.results).flatMap(v => v.rows).concat(more.rows).filter(trackable);
+  const bets = [];
+  for (const r of rows) {
+    const s = statOf(r), c = chance(r), sig = `${r.decimal}|${c.toFixed(4)}|${s ? 1 : 0}`;
+    if (TRACK.sent[statKey(r)] === sig) continue;          // already logged as it is now
+    TRACK.sent[statKey(r)] = sig;
+    bets.push({
+      event_id: r.event_id, sport_key: r.sport_key, sport: r.sport, event: r.event, home_team: r.home_team,
+      away_team: r.away_team, start: r.start, market: r.market, market_label: r.market_label, selection: r.selection,
+      label: betLabel(r), outcome: r.outcome, team_total_for: r.team_total_for, american: r.american, point: r.point,
+      decimal: r.decimal, chance: c, fair_prob: r.fair_prob, stats_prob: s && s.prob != null ? s.prob : undefined,
+      book_prob: r.book_prob, ev: r.ev, confidence: confidence(r).label, agree: agrees(r), book: state.book.name,
+    });
+  }
+  if (!bets.length) return;
+  try {
+    await fetch('/api/track', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'log', bets }) });
+  } catch (e) { bets.forEach(b => delete TRACK.sent[`${b.event_id}|${b.market}|${b.selection}`]); }   // retry next time
+}
+
+/* ---------------- Sidebar menu and pages ---------------- */
+const PAGES = { find: '#findPage', picks: '#picksView', bot: '#botView' };
+
+function openMenu() {
+  $('#sidebar').hidden = false;
+  $('#scrim').hidden = false;
+  $('#menuBtn').setAttribute('aria-expanded', 'true');
+  requestAnimationFrame(() => document.body.classList.add('menu-open'));
+  $('#sidebar .side-item[aria-current="page"]').focus();
+}
+function closeMenu() {
+  document.body.classList.remove('menu-open');
+  $('#menuBtn').setAttribute('aria-expanded', 'false');
+  $('#scrim').hidden = true;
+  setTimeout(() => { if (!document.body.classList.contains('menu-open')) $('#sidebar').hidden = true; }, 200);
+}
+
+function showPage(page) {
+  Object.entries(PAGES).forEach(([k, sel]) => $(sel).hidden = k !== page);
+  document.querySelectorAll('.side-item').forEach(b =>
+    b.dataset.page === page ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
+  closeMenu();
+  window.scrollTo(0, 0);
+  if (page === 'picks') { renderPicks(); checkResults(); }
+  if (page === 'bot') loadBot(true);
+}
+
+$('#menuBtn').onclick = openMenu;
+$('#sideClose').onclick = closeMenu;
+$('#scrim').onclick = closeMenu;
+$('#sideBook').onclick = () => { closeMenu(); showStart(); };
+document.querySelectorAll('.side-item').forEach(b => b.onclick = () => showPage(b.dataset.page));
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sidebar').hidden) closeMenu(); });
+
+/* ---------------- Bot results page ---------------- */
+const BOT = { busy: false };
+
+function botSince() {
+  const v = $('#bRange').value;
+  if (!v) return null;
+  if (v === 'season') {                              // most recent August 1st
+    const now = new Date();
+    const year = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
+    return new Date(Date.UTC(year, 7, 1)).toISOString();
+  }
+  return new Date(Date.now() - +v * 86400000).toISOString();
+}
+
+async function loadBot(checkFirst) {
+  if (BOT.busy) return;
+  BOT.busy = true;
+  if (checkFirst) { $('#bCheck').disabled = true; $('#bCheck').textContent = 'Checking…'; }
+  try {
+    const r = await fetch('/api/track', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: checkFirst ? 'grade' : 'summary', since: botSince() }) });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+    if (checkFirst) $('#bChecked').textContent = j.graded ? `${j.graded} result${j.graded > 1 ? 's' : ''} updated just now` : 'Checked just now: no new results';
+    renderBot(j.summary);
+  } catch (e) {
+    $('#bChecked').textContent = e.message;
+  }
+  BOT.busy = false;
+  $('#bCheck').disabled = false;
+  $('#bCheck').textContent = 'Check results';
+}
+
+function renderBot(s) {
+  const tone = x => x > 0 ? 'up' : x < 0 ? 'down' : '';
+  const rec = b => `${b.wins}-${b.losses}${b.pushes ? `-${b.pushes}` : ''}`;
+  const rate = b => b.win_rate != null ? pct(b.win_rate, 0) : '–';
+  const card = (big, cls, text) => `<div><b class="${cls || ''}">${big}</b>${text}</div>`;
+  const a = s.all, v = s.value, g = s.agree;
+  $('#bSummary').innerHTML = s.tracked ? [
+    card(s.tracked, '', `bets tracked, ${s.pending} waiting for a result`),
+    card(rate(a), '', a.expected != null ? `of finished bets won (${rec(a)}); the bot expected ${pct(a.expected, 0)}` : 'win rate, once games finish'),
+    card(v.bets ? signedDollars(v.profit) : '–', tone(v.profit),
+      v.bets ? `betting $100 on each good-value bet (${rec(v)}, ${signed(v.roi, 1)} return)` : 'on good-value bets, once games finish'),
+    card(g.bets ? signedDollars(g.profit) : '–', tone(g.profit),
+      g.bets ? `on "market + stats agree" bets (${rec(g)})` : 'on bets where market and stats agree'),
+    card(a.bets ? signedDollars(a.profit) : '–', tone(a.profit),
+      a.bets ? 'betting $100 on every bet, good value or not' : 'on every bet, for comparison'),
+  ].join('') : '';
+
+  const table = (title, note, rows, first) => rows.length ? `
+    <section class="bcard"><h3>${title}</h3>${note ? `<p>${note}</p>` : ''}
+      <table><tr><th>${first}</th><th class="n">Bets</th><th class="n">Won</th><th class="n">Expected</th><th class="n">$100 each</th></tr>
+      ${rows.map(r => `<tr><td>${esc(r.name)}</td><td class="n">${r.bets}</td><td class="n">${rate(r)}</td>
+        <td class="n">${r.expected != null ? pct(r.expected, 0) : '–'}</td><td class="n ${tone(r.profit)}">${signedDollars(r.profit)}</td></tr>`).join('')}
+      </table></section>` : '';
+  $('#bTables').innerHTML =
+    table('When the bot said…', 'If its chances are right, each row wins about as often as expected. Give it a few hundred bets before reading much into it.', s.calibration, 'Chance of success') +
+    table('By confidence', 'High confidence should be the most reliable.', s.by_confidence, 'Confidence') +
+    table('By league', '', s.by_league, 'League') +
+    table('By bet type', '', s.by_type, 'Bet type');
+
+  $('#bRecentTitle').hidden = !s.recent.length;
+  $('#bRecent').innerHTML = s.recent.map(b => `
+    <div class="pick ${b.status}">
+      <div class="pmain"><b>${esc(b.label || b.selection)}</b>
+        <span>${esc(b.event)}, ${esc(b.sport)}, ${when(b.start)}. ${esc(b.market_label)}.</span>
+        <span class="muted small">${esc(b.american)}: ${pct(b.chance || 0, 0)} chance of success, ${esc(b.confidence || '–')} confidence, ${signed(b.ev || 0)} value</span></div>
+      <div class="pres"><span class="badge ${b.status}">${{ won: 'Won', lost: 'Lost', push: 'Push' }[b.status]}</span>${b.final ? `<span class="final">${esc(b.final)}</span>` : ''}</div>
+    </div>`).join('');
+  $('#bEmpty').innerHTML = s.tracked ? (s.settled ? '' : '<h3>No finished games yet</h3><p>Results appear here once the games the bot logged are over. Check back after they\'ve been played.</p>')
+    : '<div class="big" aria-hidden="true">📈</div><h3>Nothing tracked for this period yet</h3><p>Scan the NFL, NBA, NHL or MLB and every moneyline, spread, total and team total the bot shows is logged here automatically.</p>';
+  $('#bEmpty').hidden = !$('#bEmpty').innerHTML;
+}
+
+$('#bCheck').onclick = () => loadBot(true);
+$('#bRange').addEventListener('change', () => loadBot(false));
+$('#bClear').onclick = async () => {
+  if (!confirm('Clear the bot\'s whole track record? Every logged bet and result will be deleted. Your saved picks are not affected.')) return;
+  await fetch('/api/track', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear' }) });
+  TRACK.sent = {};
+  loadBot(false);
+};
 
 // Start the app (kept last so everything above is defined first).
 init().catch(e => { document.body.innerHTML = `<p style="padding:40px">Odd Finder couldn't start: ${esc(e.message)}</p>`; });

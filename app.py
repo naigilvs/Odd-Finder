@@ -390,6 +390,7 @@ class ImageFinder:
 
 IMAGES = None
 PICKS = picks.PickStore()       # saved picks, in data/picks.json
+TRACK = picks.TrackStore()      # every gradable bet the bot showed, in data/track.json
 
 
 # --------------------------------------------------------------------------- analysis
@@ -788,7 +789,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in ("/api/images", "/api/stats", "/api/picks"):
+        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track"):
             return self.send_json({"error": "Not found"}, 404)
         length = int(self.headers.get("Content-Length") or 0)
         if length > 2_000_000:
@@ -801,6 +802,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": "Bad JSON"}, 400)
         if path == "/api/picks":
             return self.handle_picks(body)
+        if path == "/api/track":
+            return self.handle_track(body)
         items = body.get("items", [])
         items = [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
         if path == "/api/images":
@@ -810,6 +813,23 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"stats": demo_stats(items), "pending": 0})
         found, pending = stats.predict_many(items)
         self.send_json({"stats": found, "pending": pending})
+
+    def handle_track(self, body):
+        """Bot track record: log bets, summarize, check results, clear."""
+        action = body.get("action", "summary")
+        since = body.get("since") if isinstance(body.get("since"), str) else None
+        if action == "log":
+            bets = body.get("bets") if isinstance(body.get("bets"), list) else []
+            added, updated = TRACK.log(bets)
+            return self.send_json({"added": added, "updated": updated})
+        if action == "grade":
+            graded = 0 if DEMO else TRACK.grade_pending(refresh=True)
+            return self.send_json({"graded": graded, "summary": picks.track_summary(TRACK.all(), since)})
+        if action == "clear":
+            TRACK.clear()
+        elif action != "summary":
+            return self.send_json({"error": "Unknown action"}, 400)
+        self.send_json({"summary": picks.track_summary(TRACK.all(), since)})
 
     def handle_picks(self, body):
         """Saved picks: list, save, update (stake / manual result), delete, grade."""
@@ -900,7 +920,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global DEMO, API_KEY, IMAGES, PICKS
+    global DEMO, API_KEY, IMAGES, PICKS, TRACK
     ap = argparse.ArgumentParser(description="Betting value finder")
     ap.add_argument("--demo", action="store_true", help="use made-up sample data")
     ap.add_argument("--port", type=int, default=8765)
@@ -908,8 +928,9 @@ def main():
     API_KEY = load_api_key()
     DEMO = args.demo or not API_KEY
     IMAGES = ImageFinder()
-    if DEMO:   # keep made-up demo picks apart from real ones
+    if DEMO:   # keep made-up demo picks and results apart from real ones
         PICKS = picks.PickStore(stats.DATA_DIR / "picks_demo.json")
+        TRACK = picks.TrackStore(stats.DATA_DIR / "track_demo.json")
     stats.warm_up()   # start downloading past results in the background
     if DEMO and not args.demo:
         print("No API key found (ODDS_API_KEY or config.json), so running with DEMO data.")

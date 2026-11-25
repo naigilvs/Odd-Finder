@@ -28,6 +28,7 @@
 <div id="app" hidden>
   <header class="top">
     <div class="wrap">
+      <button class="menubtn" id="menuBtn" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">☰<span class="count" id="menuCount"></span></button>
       <a class="brand" href="#" id="home"><img src="/static/logo.svg" alt=""><span>Odd Finder</span></a>
       <div class="bookchip">
         <strong id="bookName"></strong>
@@ -35,14 +36,29 @@
       </div>
     </div>
   </header>
+
+  <!-- Sidebar menu -->
+  <div class="scrim" id="scrim" hidden></div>
+  <nav class="sidebar" id="sidebar" aria-label="Menu" hidden>
+    <div class="side-head">
+      <span class="brand"><img src="/static/logo.svg" alt=""><span>Odd Finder</span></span>
+      <button class="close" id="sideClose" aria-label="Close menu">×</button>
+    </div>
+    <button class="side-item" data-page="find" aria-current="page"><span class="ico" aria-hidden="true">🔎</span><span>Find bets<small>Main lines and more bets</small></span></button>
+    <button class="side-item" data-page="picks"><span class="ico" aria-hidden="true">★</span><span>My picks <span class="count" id="sideCount"></span><small>Bets you saved, open and settled</small></span></button>
+    <button class="side-item" data-page="bot"><span class="ico" aria-hidden="true">📈</span><span>Bot results<small>How the bot's predictions turned out</small></span></button>
+    <div class="side-foot">
+      <button class="linkbtn" id="sideBook">Change sportsbook</button>
+    </div>
+  </nav>
   <div class="demo-bar" id="restartBar" hidden><div class="wrap">Odd Finder was updated after it started, so some features won't work yet. Restart it: press Ctrl+C in the Terminal window running it, run <code>python3 app.py</code> again, then refresh this page.</div></div>
   <div class="demo-bar" id="demoBar" hidden><div class="wrap">Demo mode: these teams and odds are made up. Add your API key to config.json to see real lines.</div></div>
 
   <main class="wrap">
+    <div id="findPage">
     <div class="viewswitch" role="tablist" aria-label="Which bets">
       <button role="tab" data-view="main" aria-selected="true">Main lines<small>Moneyline, spread, total</small></button>
       <button role="tab" data-view="more" aria-selected="false">More bets<small>Alt lines, team totals, halves, props</small></button>
-      <button role="tab" data-view="picks" aria-selected="false">My picks <span class="count" id="pickCount"></span><small>Bets you saved and how they did</small></button>
     </div>
 
     <div id="mainView">
@@ -144,33 +160,6 @@
       <div class="empty" id="mEmpty"></div>
     </div>
 
-    <!-- My picks: saved bets and how they turned out -->
-    <div id="picksView" hidden>
-      <div class="picks-top">
-        <p class="more-intro">Save a bet with the ☆ next to it or the Save button in its details. Moneylines, spreads, totals and team totals in the NFL, NBA, NHL and MLB are checked automatically after the game. Mark anything else yourself.</p>
-        <div class="scan-col">
-          <button class="btn-scan" id="pCheck">Check results</button>
-          <div class="credit-line" id="pChecked">Free: uses no credits</div>
-        </div>
-      </div>
-      <div class="psum" id="pSummary"></div>
-      <div class="pconf" id="pByConf"></div>
-      <div class="filters" id="pFilters">
-        <label>Show
-          <select id="pfStatus">
-            <option value="">All picks</option>
-            <option value="pending">Waiting for result</option>
-            <option value="settled">Finished</option>
-            <option value="won">Won</option>
-            <option value="lost">Lost</option>
-          </select>
-        </label>
-        <span class="shown" id="pShown"></span>
-      </div>
-      <div class="plist" id="pList"></div>
-      <div class="empty" id="pEmpty"></div>
-    </div>
-
     <details class="explain">
       <summary>How Odd Finder ranks bets</summary>
       <div class="cols">
@@ -182,11 +171,61 @@
         <div><h4>Value</h4><p>Market win chance × decimal odds − 1. A value of +5% means the bet returns about $5 per $100 on average over many bets like it. Most bets land below zero because of the margin. <b>Market + stats agree</b> marks bets where both opinions say the chance is higher than the price implies.</p></div>
       </div>
     </details>
+    </div>
 
+    <!-- My picks: saved bets and how they turned out -->
+    <div id="picksView" hidden>
+      <h2 class="page-title">My picks</h2>
+      <div class="picks-top">
+        <p class="more-intro">Save a bet with the ☆ next to it or the Save button in its details. Moneylines, spreads, totals and team totals in the NFL, NBA, NHL and MLB are checked automatically after the game. Mark anything else yourself.</p>
+        <div class="scan-col">
+          <button class="btn-scan" id="pCheck">Check results</button>
+          <div class="credit-line" id="pChecked">Free: uses no credits</div>
+        </div>
+      </div>
+      <div class="psum" id="pSummary"></div>
+      <div class="pconf" id="pByConf"></div>
+      <div class="ptabs" role="tablist" aria-label="Which picks" id="pTabs">
+        <button role="tab" data-tab="open" aria-selected="true">Unsettled <span class="count" id="pOpenN"></span></button>
+        <button role="tab" data-tab="settled" aria-selected="false">Settled <span class="count" id="pDoneN"></span></button>
+      </div>
+      <div class="plist" id="pList"></div>
+      <div class="empty" id="pEmpty"></div>
+    </div>
+
+    <!-- Bot results: every gradable bet the bot showed, and how it turned out -->
+    <div id="botView" hidden>
+      <h2 class="page-title">Bot results</h2>
+      <div class="picks-top">
+        <p class="more-intro">Every moneyline, spread, total and team total the bot shows for the NFL, NBA, NHL and MLB is logged automatically when you scan, then checked after the game. This is how its predictions actually turned out. It uses no credits.</p>
+        <div class="scan-col">
+          <button class="btn-scan" id="bCheck">Check results</button>
+          <div class="credit-line" id="bChecked">Free: uses no credits</div>
+        </div>
+      </div>
+      <div class="filters">
+        <label>Games from
+          <select id="bRange">
+            <option value="7">Last 7 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="season">This season (since Aug 1)</option>
+            <option value="">All time</option>
+          </select>
+        </label>
+        <button class="linkbtn" id="bClear">Clear history</button>
+      </div>
+      <div class="psum" id="bSummary"></div>
+      <div class="bgrid" id="bTables"></div>
+      <h3 class="sub-title" id="bRecentTitle">Recent results</h3>
+      <div class="plist" id="bRecent"></div>
+      <div class="empty" id="bEmpty"></div>
     <details class="explain" id="accBox">
       <summary>How accurate are the stats?</summary>
       <div id="accBody"></div>
     </details>
+    </div>
+
+
     <footer>Estimates only. No bet is guaranteed, and odds change constantly, so check the line in your sportsbook before you bet. Only bet what you can afford to lose. If gambling stops being fun, call or text 1-800-GAMBLER.</footer>
   </main>
 </div>

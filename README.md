@@ -86,12 +86,25 @@ Run every test with one command. It needs no internet or API key; the page tests
 
 They check the valuation math (margin removal, value, matching lines across books, yes/no margins), bet labels, the stats model, the page's calculations, and the More bets safety checks.
 
-## My picks
+## Menu, My picks and Bot results
 
-Click the ☆ next to any bet, or **Save pick** in its details (you can add a stake), to keep it in the **My picks** tab.
+The **☰** button at the top left opens the menu: **Find bets** (main lines and more bets), **My picks** and **Bot results**.
 
-- **Automatic results:** moneylines, spreads, totals and team totals (including alternate lines) in the NFL, NBA, NHL and MLB are checked automatically after the game, from the same free ESPN scores the stats use. Opening My picks or pressing **Check results** looks for new ones and uses no credits.
-- **Marking results yourself:** player props, quarter/half/period bets and other sports get Won / Lost / Push buttons once the game has started. **Undo** puts any pick back to waiting.
-- **Summary:** your record, how often your picks won compared with the bot's expected chance, the profit if you'd bet $100 on each, your real profit where you entered a stake, and a breakdown by confidence level, which over time shows whether the bot's numbers hold up.
+### My picks
+Click the ☆ next to any bet, or **Save pick** in its details (you can add a stake). My picks has two tabs: **Unsettled** (waiting for a result) and **Settled** (won, lost or push).
 
-Picks are saved in `data/picks.json` on your computer and kept off GitHub. Demo mode uses a separate file, so made-up picks never mix with real ones.
+- **Automatic results:** moneylines, spreads, totals and team totals (including alternate lines) in the NFL, NBA, NHL and MLB are checked after the game from the same free ESPN scores the stats use. Opening the page or pressing **Check results** looks for new ones and uses no credits.
+- **Marking results yourself:** player props, quarter/half/period bets and other sports get Won / Lost / Push buttons once the game has started. **Undo** puts a pick back to unsettled.
+- **Summary:** your record, how often your picks won compared with the bot's expected chance, the profit if you'd bet $100 on each, your real profit where you entered a stake, and a breakdown by confidence.
+
+### Bot results
+Every moneyline, spread, total and team total the bot shows for the NFL, NBA, NHL and MLB is logged automatically when you scan (once per bet; a rescan updates it to the latest price) and checked after the game. The page shows:
+
+- how often finished bets won compared with what the bot expected
+- the profit if you'd bet $100 on every **good-value** bet, on every **market + stats agree** bet, and on every bet for comparison
+- **When the bot said…**: whether bets the bot gave 50–60% actually won about 55% of the time, and so on
+- results by confidence, league and bet type, and the most recent results
+- a **Games from** filter (last 7 days, last 30 days, this season, all time) and **Clear history**
+- the stats model's own accuracy report
+
+The history is kept (about 1–3 MB a year) in `data/track.json`; saved picks are in `data/picks.json`. Both stay on your computer and off GitHub, and demo mode uses separate files.

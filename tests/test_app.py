@@ -145,6 +145,7 @@ class Server(unittest.TestCase):
         app.DEMO, app.API_KEY = True, None
         cls.tmp = tempfile.TemporaryDirectory()
         app.PICKS = app.picks.PickStore(Path(cls.tmp.name) / "picks.json")   # never touch real picks
+        app.TRACK = app.picks.TrackStore(Path(cls.tmp.name) / "track.json")
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -204,6 +205,16 @@ class Server(unittest.TestCase):
         many = ",".join(f"g{i}" for i in range(app.MORE_MAX_GAMES + 1))
         self.assertEqual(self.get(f"/api/more-scan?book=fanduel&sport=basketball_nba&events={many}&markets=team_totals")[0], 400)
         self.assertEqual(self.get("/api/more-scan?book=fanduel&sport=basketball_nba&events=g1&markets=not_a_market")[0], 400)
+
+    def test_track_record(self):
+        bet = {"event_id": "t1", "sport_key": "basketball_nba", "sport": "NBA", "event": "A @ H", "home_team": "H",
+               "away_team": "A", "start": FUTURE, "market": "spreads", "market_label": "Point spread", "selection": "H -2.5",
+               "outcome": "H", "point": -2.5, "american": "-110", "decimal": 1.91, "chance": 0.55, "ev": 0.02}
+        self.assertEqual(self.post("/api/track", {"action": "log", "bets": [bet]})[1], {"added": 1, "updated": 0})
+        summary = self.post("/api/track", {"action": "summary"})[1]["summary"]
+        self.assertEqual((summary["tracked"], summary["pending"]), (1, 1))
+        self.assertEqual(self.post("/api/track", {"action": "clear"})[1]["summary"]["tracked"], 0)
+        self.assertEqual(self.post("/api/track", {"action": "explode"})[0], 400)
 
     def test_config_reports_freshness(self):
         status, body = self.get("/api/config")
