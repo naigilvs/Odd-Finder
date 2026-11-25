@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Value Finder</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171b21; --line: #262c35; --text: #e6e9ee; --muted: #8b94a3;
+    --accent: #4fb3ff; --good: #3ecf8e; --bad: #ef6b6b; --warn: #f2b84b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { padding: 18px 24px 8px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
+  .sub { color: var(--muted); }
+  .demo { background: var(--warn); color: #1a1200; font-weight: 600; padding: 6px 24px; }
+  main { padding: 8px 24px 40px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  .row { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-end; }
+  label.f { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+  select, input[type=number] { background: var(--bg); color: var(--text); border: 1px solid var(--line);
+         border-radius: 6px; padding: 6px 8px; font: inherit; min-width: 110px; }
+  button { background: var(--accent); color: #04121f; border: 0; border-radius: 6px; padding: 8px 16px;
+           font: inherit; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--accent); padding: 2px 6px; font-weight: 500; }
+  button:disabled { opacity: .5; cursor: wait; }
+  .sports { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; max-height: 150px; overflow: auto; }
+  .sports label { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+  .group-title { width: 100%; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; margin-top: 4px; }
+  .status { color: var(--muted); margin: 8px 0; min-height: 20px; }
+  .status.err { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--panel); cursor: pointer; user-select: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pos { color: var(--good); font-weight: 600; } .neg { color: var(--bad); }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+  .tag.sharp { border-color: var(--good); color: var(--good); }
+  .small { font-size: 12px; color: var(--muted); }
+  .sel { font-weight: 600; }
+  .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 4px; width: 80px; margin-left: auto; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+  details { color: var(--muted); }
+  details p { margin: 6px 0; }
+  footer { color: var(--muted); font-size: 12px; padding: 0 24px 24px; }
+</style>
+</head>
+<body>
+<div id="demoBanner" class="demo" hidden>DEMO MODE: made-up teams and odds. Add an API key to see real FanDuel lines (see README.md).</div>
+<header>
+  <h1>Value Finder</h1>
+  <span class="sub">Ranks every bet by how well the sportsbook's odds pay compared with its estimated chance of winning</span>
+</header>
+<main>
+  <div class="panel">
+    <div class="row">
+      <label class="f">Sportsbook
+        <select id="book"></select>
+      </label>
+      <label class="f">Min. books in consensus
+        <input id="minBooks" type="number" min="1" max="9" value="3">
+      </label>
+      <label class="f" style="flex-direction:row;align-items:center;gap:6px;color:var(--text)">
+        <input id="props" type="checkbox"> Include player props <span class="small">(uses many more API credits)</span>
+      </label>
+      <button id="scan">Scan odds</button>
+      <span id="quota" class="small"></span>
+    </div>
+    <div class="small" style="margin-top:12px">
+      Sports <button class="ghost" id="all">select all</button><button class="ghost" id="none">clear</button>
+    </div>
+    <div id="sports" class="sports"><span class="small">Loading sports…</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <label class="f">Bet type
+        <select id="fMarket"><option value="">All</option></select>
+      </label>
+      <label class="f">Sport
+        <select id="fSport"><option value="">All</option></select>
+      </label>
+      <label class="f">Min. win probability %
+        <input id="fProb" type="number" min="0" max="100" value="0">
+      </label>
+      <label class="f">Min. expected value %
+        <input id="fEv" type="number" step="0.5" value="-100">
+      </label>
+      <label class="f">Sort by
+        <select id="sort">
+          <option value="ev">Expected value</option>
+          <option value="fair_prob">Win probability</option>
+          <option value="edge">Probability edge</option>
+          <option value="start">Start time</option>
+        </select>
+      </label>
+    </div>
+    <div id="status" class="status">Pick sports and press <b>Scan odds</b>.</div>
+    <div style="overflow:auto;max-height:70vh">
+      <table id="tbl" hidden>
+        <thead><tr>
+          <th>#</th><th>Bet</th><th>Event</th><th>Type</th>
+          <th class="num" data-k="decimal">Odds</th>
+          <th class="num" data-k="book_prob">Book's implied %</th>
+          <th class="num" data-k="fair_prob">Est. win %</th>
+          <th class="num" data-k="ev">Expected value</th>
+          <th>Based on</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <details class="panel">
+    <summary>How the ranking works</summary>
+    <p><b>Est. win %</b>: every other sportsbook's price for the same line, with its built-in margin (the vig) removed, averaged together. Low-margin books such as Pinnacle count more. This consensus is usually a better estimate of the real chance than any single book.</p>
+    <p><b>Book's implied %</b>: the chance the chosen sportsbook's odds imply (1 ÷ decimal odds), margin included.</p>
+    <p><b>Expected value</b>: est. win % × decimal odds − 1. +3% means that, if the estimate is right, the bet returns $3 per $100 on average over many bets. Most bets show a negative number because of the margin; positive ones are where the book is out of line with the market.</p>
+    <p>A high win probability alone is not a good bet. A 90% favorite at odds that imply 95% loses money over time. That's why the list is ranked by expected value, and you can filter by win probability.</p>
+  </details>
+</main>
+<footer>
+  Estimates only: no bet is guaranteed and odds change constantly. Check the line in the app before you bet.
+  Only bet what you can afford to lose. If gambling stops being fun, call or text 1-800-GAMBLER.
+</footer>
+
+<script>
+const $ = s => document.querySelector(s);
+let rows = [];
+
+const pct = (x, d = 1) => (x * 100).toFixed(d) + '%';
+const fmtTime = iso => new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function getJSON(url) {
+  const r = await fetch(url);
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+function showQuota(q) {
+  if (q && q.remaining != null) $('#quota').textContent = `API credits left this month: ${q.remaining}`;
+}
+
+async function init() {
+  const cfg = await getJSON('/api/config');
+  $('#demoBanner').hidden = !cfg.demo;
+  $('#book').innerHTML = cfg.books.map(b => `<option value="${b.key}">${esc(b.name)}</option>`).join('');
+  showQuota(cfg.quota);
+  try {
+    const sports = await getJSON('/api/sports');
+    const groups = {};
+    sports.forEach(s => (groups[s.group] = groups[s.group] || []).push(s));
+    const popular = ['americanfootball_nfl', 'basketball_nba', 'icehockey_nhl', 'baseball_mlb', 'americanfootball_ncaaf', 'basketball_ncaab'];
+    $('#sports').innerHTML = Object.keys(groups).sort().map(g =>
+      `<div class="group-title">${esc(g)}</div>` + groups[g].map(s =>
+        `<label><input type="checkbox" value="${s.key}" ${cfg.demo || popular.includes(s.key) ? 'checked' : ''}> ${esc(s.title)}</label>`
+      ).join('')).join('');
+  } catch (e) {
+    $('#sports').innerHTML = `<span class="status err">${esc(e.message)}</span>`;
+  }
+}
+
+async function scan() {
+  const sports = [...document.querySelectorAll('#sports input:checked')].map(i => i.value);
+  if (!sports.length) return setStatus('Pick at least one sport.', true);
+  $('#scan').disabled = true;
+  setStatus(`Scanning ${sports.length} sport${sports.length > 1 ? 's' : ''}…`);
+  try {
+    const p = new URLSearchParams({ book: $('#book').value, sports: sports.join(','),
+      props: $('#props').checked ? 1 : 0, min_books: $('#minBooks').value });
+    const res = await getJSON('/api/scan?' + p);
+    rows = res.rows;
+    showQuota(res.quota);
+    fillFilters();
+    render();
+    const errs = res.errors.length ? ` Some sports failed: ${res.errors.join('; ')}` : '';
+    setStatus(`${res.count} ${res.book} bets analyzed at ${new Date(res.generated).toLocaleTimeString()}.${errs}`, !!res.errors.length && !res.count);
+  } catch (e) {
+    setStatus(e.message, true);
+  } finally {
+    $('#scan').disabled = false;
+  }
+}
+
+function setStatus(msg, err) { const s = $('#status'); s.textContent = msg; s.className = 'status' + (err ? ' err' : ''); }
+
+function fillFilters() {
+  const opts = (sel, vals) => {
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">All</option>' + [...new Set(vals)].sort().map(v => `<option>${esc(v)}</option>`).join('');
+    sel.value = [...sel.options].some(o => o.value === cur) ? cur : '';
+  };
+  opts($('#fMarket'), rows.map(r => r.market_label));
+  opts($('#fSport'), rows.map(r => r.sport));
+}
+
+function render() {
+  const m = $('#fMarket').value, sp = $('#fSport').value;
+  const minP = +$('#fProb').value / 100, minEv = +$('#fEv').value / 100, key = $('#sort').value;
+  const list = rows.filter(r => (!m || r.market_label === m) && (!sp || r.sport === sp) && r.fair_prob >= minP && r.ev >= minEv);
+  list.sort((a, b) => key === 'start' ? a.start.localeCompare(b.start) : b[key] - a[key]);
+  $('#tbl').hidden = !rows.length;
+  $('#tbl tbody').innerHTML = list.slice(0, 500).map((r, i) => `
+    <tr>
+      <td class="small">${i + 1}</td>
+      <td><div class="sel">${esc(r.selection)}</div></td>
+      <td>${esc(r.event)}<div class="small">${esc(r.sport)} · ${fmtTime(r.start)}</div></td>
+      <td>${esc(r.market_label)}</td>
+      <td class="num"><b>${r.american}</b><div class="small">${r.decimal.toFixed(2)}</div></td>
+      <td class="num">${pct(r.book_prob)}</td>
+      <td class="num">${pct(r.fair_prob)}<div class="bar"><i style="width:${(r.fair_prob * 100).toFixed(0)}%"></i></div></td>
+      <td class="num ${r.ev > 0 ? 'pos' : 'neg'}">${r.ev > 0 ? '+' : ''}${pct(r.ev, 2)}</td>
+      <td><span class="tag ${r.sharp ? 'sharp' : ''}" title="${esc(r.books_used.join(', '))}">${r.books_used.length} books${r.sharp ? ' · sharp' : ''}</span></td>
+    </tr>`).join('');
+  if (rows.length && !list.length) setStatus('No bets match these filters.');
+}
+
+$('#scan').onclick = scan;
+$('#all').onclick = () => document.querySelectorAll('#sports input').forEach(i => i.checked = true);
+$('#none').onclick = () => document.querySelectorAll('#sports input').forEach(i => i.checked = false);
+['#fMarket', '#fSport', '#fProb', '#fEv', '#sort'].forEach(s => $(s).addEventListener('input', render));
+init();
+</script>
+</body>
+</html>
