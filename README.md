@@ -45,3 +45,15 @@ Add it to `TARGET_BOOKS` in `app.py`, using The Odds API's bookmaker key, for ex
 Logos and photos come from [TheSportsDB](https://www.thesportsdb.com), a free, community-run sports database. Each name is looked up once, about one every 2.5 seconds because of the free plan's limits, and saved in `images.json`. The first scan of a new league fills its pictures in over a minute or so; after that they load instantly. Names it can't find show initials instead.
 
 Team logos are trademarks of their teams and leagues. They're fine to show in a personal tool like this, but get permission before using them on a public or paid site.
+
+## Stats second opinion
+
+Next to the market's win chance, each moneyline, spread and total in the NFL, NBA, NHL and MLB also gets a **stats win chance** worked out from past games (`stats.py`):
+
+- **Past results:** final scores for last season and this season come from ESPN's public scoreboard feeds, which are free and need no key. They're saved in `data/`, so only new games are downloaded. The very first start takes a minute or two to fill it.
+- **Moneyline:** each team has a strength rating (Elo) that rises with wins and falls with losses, adjusted for opponent strength, margin and home advantage.
+- **Spread:** the rating gap gives an expected winning margin, and the typical spread of real results around it gives the chance of covering.
+- **Totals:** each team's points scored and allowed give an expected game total.
+- **Tuning and testing:** settings are tuned on last season and tested on this season, so the accuracy check is honest. See **How accurate are the stats?** on the page. A league or bet type that tests poorly isn't given a stats number.
+
+Bets get a **Market + stats agree** badge when both opinions say the chance of winning is higher than FanDuel's price implies. The stats don't know about injuries or news, so treat them as a check on the market rather than a replacement. Player props, soccer and college sports aren't covered by the stats yet.

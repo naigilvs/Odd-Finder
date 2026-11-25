@@ -193,6 +193,22 @@
   .ev.pos { background: var(--amber); color: var(--ink); }
   .ev.neg { background: var(--panel-2); color: var(--slate); }
   .tag-sharp { font-size: 12px; color: var(--turf); }
+  .probs b.up { color: var(--turf); }
+  .probs b.down { color: var(--slate); }
+  .bet .what .form, .toppick .form { display: block; font-size: 12px; color: var(--slate); margin-top: 2px; }
+  .toppick .form { font-size: 14px; margin-top: 6px; }
+  .agree { display: inline-block; margin-top: 5px; font: normal 600 12px var(--body); color: var(--ink); background: var(--turf); border-radius: 4px; padding: 1px 7px; }
+  .filters .check { flex-direction: row; align-items: center; gap: 8px; color: var(--chalk); font-size: 14px; padding-bottom: 8px; cursor: pointer; }
+  .filters .check input { width: 16px; height: 16px; min-width: 0; accent-color: var(--turf); }
+  .acc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 24px; padding-bottom: 22px; }
+  .acc p { margin: 0 0 10px; color: var(--slate); font-size: 15px; }
+  .acc p b { color: var(--chalk); }
+  .acc p.ok { color: var(--turf); font-weight: 600; }
+  .acc p.warn { color: var(--amber); font-weight: 600; }
+  .acc table { width: 100%; border-collapse: collapse; margin: 4px 0 12px; font-size: 14px; }
+  .acc th, .acc td { text-align: left; padding: 4px 0; border-bottom: 1px solid var(--line); }
+  .acc th { color: var(--slate); font-weight: 500; }
+  .acc .n { text-align: right; font-variant-numeric: tabular-nums; }
 
   .empty { text-align: center; padding: 70px 20px 80px; color: var(--slate); }
   .empty .big { font-size: 46px; }
@@ -285,6 +301,7 @@
           </select>
         </label>
         <label>Books needed<input id="minBooks" type="number" min="1" max="9" value="3" title="Only show bets at least this many other sportsbooks also offer"></label>
+        <label class="check"><input type="checkbox" id="fAgree"> Only when stats agree</label>
         <span class="shown" id="shown"></span>
       </div>
 
@@ -295,10 +312,16 @@
     <details class="explain">
       <summary>How Odd Finder ranks bets</summary>
       <div class="cols">
-        <div><h4>Win chance</h4><p>For each bet, Odd Finder looks up the same line at up to 9 other sportsbooks, strips out each book's built-in margin, and averages them. Sharp books like Pinnacle count extra because their prices are the most accurate.</p></div>
+        <div><h4>Market win chance</h4><p>For each bet, Odd Finder looks up the same line at up to 9 other sportsbooks, strips out each book's built-in margin, and averages them. Sharp books like Pinnacle count extra because their prices are the most accurate.</p></div>
+        <div><h4>Stats win chance</h4><p>A second opinion from this season's and last season's results: team strength ratings, points scored and allowed, and home advantage. It doesn't know about injuries or news, so treat it as a check on the market, not a replacement. Covers moneylines, spreads and totals in the NFL, NBA, NHL and MLB.</p></div>
         <div><h4>Book's price</h4><p>The chance your sportsbook's odds imply, margin included. On each bet, the red tick on the bar marks it. When the bar runs past the tick, the bet's real chance is higher than the price suggests.</p></div>
-        <div><h4>Value</h4><p>Win chance × decimal odds − 1. A value of +5% means the bet returns about $5 per $100 on average over many bets like it. Most bets land below zero because of the margin.</p></div>
+        <div><h4>Value</h4><p>Market win chance × decimal odds − 1. A value of +5% means the bet returns about $5 per $100 on average over many bets like it. Most bets land below zero because of the margin. <b>Market + stats agree</b> marks bets where both opinions say the chance is higher than the price implies.</p></div>
       </div>
+    </details>
+
+    <details class="explain" id="accBox">
+      <summary>How accurate are the stats?</summary>
+      <div id="accBody"></div>
     </details>
     <footer>Estimates only. No bet is guaranteed, and odds change constantly, so check the line in your sportsbook before you bet. Only bet what you can afford to lose. If gambling stops being fun, call or text 1-800-GAMBLER.</footer>
   </main>
@@ -415,6 +438,8 @@ async function scan() {
       props: $('#props').checked ? 1 : 0, min_books: 1 });
     const res = await getJSON('/api/scan?' + p);
     const at = Date.now();
+    STATS.known = {};            // fresh odds: ask for fresh stats too
+    clearTimeout(STATS.timer); STATS.timer = null;
     sports.forEach(k => state.results[k] = { rows: [], at });
     res.rows.forEach(r => (state.results[r.sport_key] ||= { rows: [], at }).rows.push(r));
     try { localStorage.setItem(storeKey(), JSON.stringify(state.results)); } catch (e) { /* storage full: keep in memory */ }
@@ -447,7 +472,8 @@ function filtered() {
   const m = $('#fMarket').value, minP = +$('#fProb').value / 100, minEv = +$('#fEv').value / 100;
   const minBooks = +$('#minBooks').value || 1, key = $('#sort').value;
   return rowsInTab()
-    .filter(r => (!m || r.market_label === m) && r.fair_prob >= minP && r.ev >= minEv && r.books_used.length >= minBooks)
+    .filter(r => (!m || r.market_label === m) && r.fair_prob >= minP && r.ev >= minEv && r.books_used.length >= minBooks
+      && (!$('#fAgree').checked || agrees(r)))
     .sort((a, b) => key === 'start' ? a.start.localeCompare(b.start) : b[key] - a[key]);
 }
 
@@ -492,9 +518,11 @@ function renderResults(fresh) {
         <div class="label">Best value right now</div>
         <div class="who">${avatarFor(top)}<h3>${esc(top.selection)}</h3></div>
         <div class="event">${esc(top.event)}, ${esc(top.sport)}, ${when(top.start)}</div>
+        ${agrees(top) ? '<em class="agree">Market + stats agree</em>' : ''}${formLine(top)}
         <div class="facts">
           <div><b>${top.american}</b>${esc(state.book.name)} odds</div>
-          <div><b>${pct(top.fair_prob)}</b>estimated win chance</div>
+          <div><b>${pct(top.fair_prob)}</b>market win chance</div>
+          <div><b>${statOf(top) && statOf(top).prob != null ? pct(statOf(top).prob) : '–'}</b>stats win chance</div>
           <div><b>${pct(top.book_prob)}</b>chance the price implies</div>
           <div><b>${esc(top.market_label)}</b>bet type</div>
         </div>
@@ -506,17 +534,91 @@ function renderResults(fresh) {
   $('#list').innerHTML = list.slice(0, 300).map((r, i) => `
     <div class="bet">
       <div class="rank">${i + 1}</div>
-      <div class="what">${avatarFor(r)}<div><b>${esc(r.selection)}</b><span>${esc(r.event)}</span></div></div>
+      <div class="what">${avatarFor(r)}<div><b>${esc(r.selection)}</b><span>${esc(r.event)}</span>${formLine(r)}${agrees(r) ? '<em class="agree">Market + stats agree</em>' : ''}</div></div>
       <div class="type">${esc(r.market_label)}<span class="when">${esc(r.sport)}, ${when(r.start)}</span></div>
       <div class="odds">${r.american}<small>${r.decimal.toFixed(2)}</small></div>
       <div class="probs" title="Compared with ${esc(r.books_used.join(', '))}">
-        Win chance <b>${pct(r.fair_prob)}</b>
+        Market <b>${pct(r.fair_prob)}</b>
         <div class="meter"><i style="width:${(r.fair_prob * 100).toFixed(1)}%"></i><em style="left:${(r.book_prob * 100).toFixed(1)}%"></em></div>
+        ${statLine(r)}<br>
         Price implies ${pct(r.book_prob)}${r.sharp ? ' <span class="tag-sharp">incl. sharp books</span>' : ''}
       </div>
       <div class="ev ${r.ev > 0 ? 'pos' : 'neg'}">${signed(r.ev)}<small>value</small></div>
     </div>`).join('');
   loadImages();
+  loadStats();
+}
+
+/* ---------------- stats second opinion ---------------- */
+const STATS = { known: {}, timer: null, busy: false };
+const statKey = r => `${r.event_id}|${r.market}|${r.selection}`;
+const statOf = r => STATS.known[statKey(r)];
+const nick = n => (n || '').split(' ').slice(-1)[0];
+// Both opinions think the bet's chance is higher than FanDuel's price implies.
+const agrees = r => { const s = statOf(r); return !!(s && s.prob != null && r.ev > 0 && s.prob > r.book_prob); };
+
+function statLine(r) {
+  const s = statOf(r);
+  if (!s) return '<span class="muted">Stats loading…</span>';
+  if (s.prob == null) return `<span class="muted" title="${esc(s.reason || '')}">Stats not available</span>`;
+  return `Stats <b class="${s.prob > r.book_prob ? 'up' : 'down'}">${pct(s.prob)}</b>`;
+}
+
+function formLine(r) {
+  const s = statOf(r);
+  if (!s || !s.form_home || !s.form_away) return '';
+  return `<span class="form">Last 10: ${esc(nick(r.away_team))} ${esc(s.form_away)}, ${esc(nick(r.home_team))} ${esc(s.form_home)}</span>`;
+}
+
+// Ask the server for the stats opinion on every bet we have. Leagues whose past
+// results are still downloading come back as "pending", so ask again shortly.
+async function loadStats(fromTimer) {
+  if (STATS.busy || (STATS.timer && !fromTimer)) return;
+  STATS.timer = null;
+  const rows = Object.values(state.results).flatMap(v => v.rows).filter(r => !(statKey(r) in STATS.known));
+  if (!rows.length) return;
+  STATS.busy = true;
+  let changed = false;
+  try {
+    const items = rows.map(r => ({ key: statKey(r), sport_key: r.sport_key, market: r.market, outcome: r.outcome,
+      point: r.point, home: r.home_team, away: r.away_team, fair_prob: r.fair_prob }));
+    const res = await (await fetch('/api/stats', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }) })).json();
+    changed = Object.keys(res.stats || {}).length > 0;
+    Object.assign(STATS.known, res.stats || {});
+    if (res.pending) STATS.timer = setTimeout(() => loadStats(true), 5000);
+  } catch (e) { /* stats are optional; the market numbers still show */ }
+  STATS.busy = false;
+  if (changed) { renderTabs(); renderResults(); }
+}
+
+async function loadAccuracy() {
+  const box = $('#accBody');
+  box.innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    const leagues = await getJSON('/api/accuracy');
+    box.innerHTML = (state.cfg.demo ? '<p class="muted">Demo mode: the stats shown on bets are made up, but this report comes from real past games.</p>' : '') +
+      '<div class="acc-grid">' + leagues.map(lg => {
+        const r = lg.report;
+        if (!r) {
+          const msg = lg.status === 'error' ? `Couldn't load past results: ${esc(lg.error || '')}` : 'Downloading past results…';
+          return `<div class="acc"><h4>${esc(lg.league)}</h4><p class="muted">${msg}</p></div>`;
+        }
+        const used = Object.entries(r.usable || {}).filter(([, ok]) => ok).map(([k]) => k);
+        const names = { moneyline: 'moneylines', spread: 'spreads', total: 'totals' };
+        const rows = (r.buckets || []).map(b =>
+          `<tr><td>${esc(b.range)}</td><td class="n">${b.games}</td><td class="n">${pct(b.actual)}</td></tr>`).join('');
+        return `<div class="acc"><h4>${esc(lg.league)}</h4>
+          <p>Tested on <b>${r.games}</b> games from this season, each predicted before it was played. Picked the winner <b>${pct(r.picked_winner || 0, 0)}</b> of the time.</p>
+          ${rows ? `<table><tr><th>When stats said</th><th class="n">Games</th><th class="n">Teams won</th></tr>${rows}</table>` : ''}
+          ${r.spread_coverage != null ? `<p>The real margin landed inside the stats' likely range ${pct(r.spread_coverage, 0)} of the time, and the real total ${pct(r.total_coverage, 0)} of the time (aim: 80%).</p>` : ''}
+          <p class="${used.length ? 'ok' : 'warn'}">${used.length ? 'Used for ' + used.map(u => names[u]).join(', ') : 'Not used yet: not enough reliable results this season'}</p>
+        </div>`;
+      }).join('') + '</div>';
+    if (leagues.some(lg => !lg.report && lg.status !== 'error')) setTimeout(() => { if ($('#accBox').open) loadAccuracy(); }, 5000);
+  } catch (e) {
+    box.innerHTML = `<p class="muted">${esc(e.message)}</p>`;
+  }
 }
 
 /* ---------------- logos and player photos ---------------- */
@@ -607,6 +709,8 @@ $('#props').onchange = renderScanButton;
 $('#changeBook').onclick = showStart;
 $('#home').onclick = e => { e.preventDefault(); state.tab = 'all'; renderAll(); };
 ['#fMarket', '#fProb', '#fEv', '#sort', '#minBooks'].forEach(s => $(s).addEventListener('input', () => renderResults()));
+$('#fAgree').addEventListener('change', () => renderResults());
+$('#accBox').addEventListener('toggle', () => { if ($('#accBox').open) loadAccuracy(); });
 init().catch(e => { document.body.innerHTML = `<p style="padding:40px">Odd Finder couldn't start: ${esc(e.message)}</p>`; });
 </script>
 </body>

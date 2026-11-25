@@ -28,6 +28,8 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import stats
+
 ROOT = Path(__file__).resolve().parent
 API_BASE = "https://api.the-odds-api.com/v4"
 
@@ -347,6 +349,8 @@ def analyze_event(event, target, min_books):
                 "away_team": event.get("away_team"),
                 "pick_team": n if n in (home, event.get("away_team")) else None,
                 "player": o.get("description"),
+                "outcome": n,
+                "point": o.get("point"),
                 "start": event["commence_time"],
                 "market": market,
                 "market_label": MARKET_LABELS.get(market, market.replace("_", " ").title()),
@@ -459,6 +463,22 @@ def demo_events(sport, target, include_props):
     return events
 
 
+def demo_stats(items):
+    """Made-up stats for demo mode: the market's chance nudged up or down a little."""
+    out = {}
+    for it in items:
+        key = it.get("key", "")
+        if it.get("market") not in ("h2h", "spreads", "totals") or it.get("outcome") == "Draw":
+            out[key] = {"reason": "Stats don't cover this bet type yet"}
+            continue
+        rng = random.Random(key)
+        fair = float(it.get("fair_prob") or 0.5)
+        out[key] = {"prob": round(min(max(fair + rng.uniform(-0.06, 0.06), 0.02), 0.98), 4),
+                    "form_home": f"{rng.randint(3, 8)}-{rng.randint(2, 7)}",
+                    "form_away": f"{rng.randint(3, 8)}-{rng.randint(2, 7)}"}
+    return out
+
+
 # --------------------------------------------------------------------------- web server
 
 class Handler(BaseHTTPRequestHandler):
@@ -474,17 +494,24 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        if urllib.parse.urlparse(self.path).path != "/api/images":
+        path = urllib.parse.urlparse(self.path).path
+        if path not in ("/api/images", "/api/stats"):
             return self.send_json({"error": "Not found"}, 404)
         length = int(self.headers.get("Content-Length") or 0)
-        if length > 200_000:
+        if length > 2_000_000:
             return self.send_json({"error": "Request too large"}, 413)
         try:
             items = json.loads(self.rfile.read(length) or b"{}").get("items", [])
         except ValueError:
             return self.send_json({"error": "Bad JSON"}, 400)
-        found, pending = IMAGES.get(items if isinstance(items, list) else [])
-        self.send_json({"images": found, "pending": pending})
+        items = [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+        if path == "/api/images":
+            found, pending = IMAGES.get(items)
+            return self.send_json({"images": found, "pending": pending})
+        if DEMO:
+            return self.send_json({"stats": demo_stats(items), "pending": 0})
+        found, pending = stats.predict_many(items)
+        self.send_json({"stats": found, "pending": pending})
 
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
@@ -513,6 +540,8 @@ class Handler(BaseHTTPRequestHandler):
                                 "coming_soon": COMING_SOON_BOOKS,
                                 "demo": DEMO, "has_key": bool(API_KEY), "quota": _quota,
                                 "prop_sports": list(PROP_MARKETS)})
+            elif url.path == "/api/accuracy":
+                self.send_json(stats.accuracy())
             elif url.path == "/api/sports":
                 self.send_json(list_sports())
             elif url.path == "/api/scan":
@@ -540,6 +569,7 @@ def main():
     API_KEY = load_api_key()
     DEMO = args.demo or not API_KEY
     IMAGES = ImageFinder()
+    stats.warm_up()   # start downloading past results in the background
     if DEMO and not args.demo:
         print("No API key found (ODDS_API_KEY or config.json), so running with DEMO data.")
     try:
