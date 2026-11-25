@@ -66,6 +66,17 @@ MARKET_LABELS = {
 PROP_EVENTS_PER_SPORT = 8      # caps API usage when props are turned on
 CACHE_SECONDS = 300
 
+# Team logos and player photos come from TheSportsDB's free API (key "123").
+# The free plan allows ~30 requests a minute, so names are looked up one at a
+# time in the background and saved to images.json; each is only looked up once.
+SPORTSDB = "https://www.thesportsdb.com/api/v1/json/123"
+IMAGE_CACHE_FILE = ROOT / "images.json"
+SPORTSDB_SPORT = {"American Football": "American Football", "Basketball": "Basketball",
+                  "Ice Hockey": "Ice Hockey", "Baseball": "Baseball", "Soccer": "Soccer",
+                  "Mixed Martial Arts": "Fighting", "Boxing": "Fighting"}
+RETRY_MISSING_IMAGE_AFTER = 7 * 24 * 3600   # try again for names not found a week ago
+SPORTSDB_GAP_SECONDS = 2.5
+
 DEMO = False
 API_KEY = None
 _cache = {}
@@ -161,6 +172,90 @@ def merge_bookmakers(event, extra_books):
             event["bookmakers"].append(b)
 
 
+# --------------------------------------------------------------------------- logos and photos
+
+class ImageFinder:
+    """Finds team logos and player photos, one lookup at a time, and remembers them."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        try:
+            self.cache = json.loads(IMAGE_CACHE_FILE.read_text())
+        except (OSError, ValueError):
+            self.cache = {}
+        self.queue, self.queued = [], set()
+        threading.Thread(target=self._work, daemon=True).start()
+
+    def get(self, items):
+        """Return the images already known; queue the rest. -> (images, pending count)"""
+        found, pending = {}, 0
+        with self.lock:
+            for it in items[:500]:
+                kind, name = it.get("kind"), (it.get("name") or "").strip()
+                if kind not in ("team", "player") or not name:
+                    continue
+                key = f"{kind}|{name}"
+                hit = self.cache.get(key)
+                if hit and (hit["url"] or time.time() - hit["at"] < RETRY_MISSING_IMAGE_AFTER):
+                    found[key] = hit["url"]
+                    continue
+                if key not in self.queued:
+                    self.queued.add(key)
+                    self.queue.append((key, kind, name, it.get("group") or ""))
+                pending += 1
+        return found, pending
+
+    def _work(self):
+        while True:
+            with self.lock:
+                job = self.queue.pop(0) if self.queue else None
+            if not job:
+                time.sleep(0.5)
+                continue
+            key, kind, name, group = job
+            try:
+                url = self._lookup(kind, name, group)
+            except Exception as e:
+                with self.lock:            # network trouble or rate limit: try again later
+                    self.queue.append(job)
+                rate_limited = isinstance(e, urllib.error.HTTPError) and e.code == 429
+                time.sleep(60 if rate_limited else SPORTSDB_GAP_SECONDS * 5)
+                continue
+            with self.lock:
+                self.cache[key] = {"url": url, "at": time.time()}
+                self.queued.discard(key)
+                IMAGE_CACHE_FILE.write_text(json.dumps(self.cache, indent=0))
+            time.sleep(SPORTSDB_GAP_SECONDS)
+
+    @staticmethod
+    def _search(endpoint, **params):
+        url = f"{SPORTSDB}/{endpoint}?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "odd-finder/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.load(resp)
+
+    def _lookup(self, kind, name, group):
+        sport = SPORTSDB_SPORT.get(group)
+        if kind == "team":
+            results = self._search("searchteams.php", t=name).get("teams") or []
+            if not results and name.lower().endswith((" fc", " cf", " sc")):
+                results = self._search("searchteams.php", t=name[:-3]).get("teams") or []
+            fields = ("strBadge", "strLogo")
+        else:
+            results = self._search("searchplayers.php", p=name).get("player") or []
+            fields = ("strCutout", "strThumb")
+        if sport:  # don't show a logo from a different sport with the same name
+            results = [r for r in results if r.get("strSport") == sport]
+        for r in results:
+            for f in fields:
+                if r.get(f):
+                    return r[f] + "/tiny"
+        return None
+
+
+IMAGES = None
+
+
 # --------------------------------------------------------------------------- analysis
 
 def parse_time(s):
@@ -248,6 +343,10 @@ def analyze_event(event, target, min_books):
                 "sport_key": event.get("sport_key"),
                 "sport": event.get("sport_title", event.get("sport_key")),
                 "event": f"{event.get('away_team')} @ {home}" if home else event.get("sport_title"),
+                "home_team": home,
+                "away_team": event.get("away_team"),
+                "pick_team": n if n in (home, event.get("away_team")) else None,
+                "player": o.get("description"),
                 "start": event["commence_time"],
                 "market": market,
                 "market_label": MARKET_LABELS.get(market, market.replace("_", " ").title()),
@@ -374,6 +473,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        if urllib.parse.urlparse(self.path).path != "/api/images":
+            return self.send_json({"error": "Not found"}, 404)
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > 200_000:
+            return self.send_json({"error": "Request too large"}, 413)
+        try:
+            items = json.loads(self.rfile.read(length) or b"{}").get("items", [])
+        except ValueError:
+            return self.send_json({"error": "Bad JSON"}, 400)
+        found, pending = IMAGES.get(items if isinstance(items, list) else [])
+        self.send_json({"images": found, "pending": pending})
+
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(url.query)
@@ -420,13 +532,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global DEMO, API_KEY
+    global DEMO, API_KEY, IMAGES
     ap = argparse.ArgumentParser(description="Betting value finder")
     ap.add_argument("--demo", action="store_true", help="use made-up sample data")
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args()
     API_KEY = load_api_key()
     DEMO = args.demo or not API_KEY
+    IMAGES = ImageFinder()
     if DEMO and not args.demo:
         print("No API key found (ODDS_API_KEY or config.json), so running with DEMO data.")
     try:

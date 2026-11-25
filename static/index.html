@@ -153,8 +153,27 @@
     gap: 16px; align-items: center; padding: 14px 6px; border-bottom: 1px solid var(--line);
   }
   .bet .rank { font: 600 20px var(--display); color: var(--slate); text-align: right; }
+  .bet .what { display: flex; align-items: center; gap: 14px; min-width: 0; }
   .bet .what b { display: block; font-weight: 600; font-size: 17px; }
   .bet .what span { font-size: 14px; color: var(--slate); }
+
+  /* logos and player photos */
+  .av {
+    position: relative; flex: none; width: 44px; height: 44px; border-radius: 50%; overflow: hidden;
+    background: var(--panel-2); display: grid; place-items: center;
+    font: 600 15px var(--display); color: var(--slate); letter-spacing: .5px;
+  }
+  .av img { position: absolute; inset: 5px; width: calc(100% - 10px); height: calc(100% - 10px); object-fit: contain; }
+  .av.player { background: #24507A; }
+  .av.player img { inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 0; }
+  .av img ~ b { visibility: hidden; }
+  .pair { display: flex; flex: none; }
+  .pair .av { width: 34px; height: 34px; font-size: 12px; border: 2px solid var(--ink); }
+  .pair .av + .av { margin-left: -10px; }
+  .toppick .who { display: flex; align-items: center; gap: 18px; margin: 8px 0; }
+  .toppick .who h3 { margin: 0; }
+  .toppick .av { width: 76px; height: 76px; font-size: 24px; }
+  .toppick .pair .av { width: 58px; height: 58px; font-size: 18px; border-color: var(--panel); }
   .bet .type { font-size: 14px; color: var(--slate); }
   .bet .type .when { display: block; }
   .bet .odds { font: 700 24px var(--display); text-align: right; }
@@ -177,7 +196,7 @@
   /* ---------- explainer + footer ---------- */
   .explain { margin: 40px 0 0; background: var(--panel); border-radius: 12px; padding: 4px 24px; }
   .explain summary { cursor: pointer; padding: 16px 0; font: 600 21px var(--display); }
-  .explain .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px; padding-bottom: 22px; }
+  .explain .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 24px; padding-bottom: 22px; }
   .explain h4 { font: 600 18px var(--display); margin: 0 0 4px; color: var(--amber); }
   .explain p { margin: 0; color: var(--slate); font-size: 15px; max-width: 60ch; }
   footer { padding: 30px 0 48px; font-size: 13px; color: var(--slate); }
@@ -195,6 +214,10 @@
     header.top .wrap { gap: 10px; }
   }
   .brand span, .linkbtn { white-space: nowrap; }
+  @media (max-width: 420px) {
+    header.top .brand span { display: none; }
+    .wrap { padding: 0 16px; }
+  }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
   @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   .toppick.fresh { animation: rise .35s ease-out; }
@@ -443,7 +466,7 @@ function renderResults(fresh) {
     $('#toppick').innerHTML = `
       <div>
         <div class="label">Best value right now</div>
-        <h3>${esc(top.selection)}</h3>
+        <div class="who">${avatarFor(top)}<h3>${esc(top.selection)}</h3></div>
         <div class="event">${esc(top.event)}, ${esc(top.sport)}, ${when(top.start)}</div>
         <div class="facts">
           <div><b>${top.american}</b>${esc(state.book.name)} odds</div>
@@ -459,7 +482,7 @@ function renderResults(fresh) {
   $('#list').innerHTML = list.slice(0, 300).map((r, i) => `
     <div class="bet">
       <div class="rank">${i + 1}</div>
-      <div class="what"><b>${esc(r.selection)}</b><span>${esc(r.event)}</span></div>
+      <div class="what">${avatarFor(r)}<div><b>${esc(r.selection)}</b><span>${esc(r.event)}</span></div></div>
       <div class="type">${esc(r.market_label)}<span class="when">${esc(r.sport)}, ${when(r.start)}</span></div>
       <div class="odds">${r.american}<small>${r.decimal.toFixed(2)}</small></div>
       <div class="probs" title="Compared with ${esc(r.books_used.join(', '))}">
@@ -469,6 +492,66 @@ function renderResults(fresh) {
       </div>
       <div class="ev ${r.ev > 0 ? 'pos' : 'neg'}">${signed(r.ev)}<small>value</small></div>
     </div>`).join('');
+  loadImages();
+}
+
+/* ---------------- logos and player photos ---------------- */
+const IMG = { known: {}, timer: null };
+
+function initials(name) {
+  const words = name.replace(/[^A-Za-z0-9 .'-]/g, '').split(/\s+/).filter(Boolean);
+  if (!words.length) return '?';
+  return (words.length === 1 ? words[0].slice(0, 2) : words[0][0] + words[words.length - 1][0]).toUpperCase();
+}
+
+function avatar(kind, name, group) {
+  const key = `${kind}|${name}`, url = IMG.known[key];
+  return `<span class="av ${kind}" data-key="${esc(key)}" data-group="${esc(group || '')}" title="${esc(name)}">` +
+    (url ? `<img src="${esc(url)}" alt="" loading="lazy" onerror="this.remove()">` : '') +
+    `<b aria-hidden="true">${esc(initials(name))}</b></span>`;
+}
+
+function avatarFor(r) {
+  const group = state.groupOf[r.sport_key] || '';
+  const fighters = group === 'Mixed Martial Arts' || group === 'Boxing';
+  if (r.player) return avatar('player', r.player, group);
+  if (r.pick_team) return avatar(fighters ? 'player' : 'team', r.pick_team, group);
+  if (r.home_team && r.away_team) {
+    const k = fighters ? 'player' : 'team';
+    return `<span class="pair">${avatar(k, r.away_team, group)}${avatar(k, r.home_team, group)}</span>`;
+  }
+  return '';
+}
+
+function applyImages() {
+  document.querySelectorAll('.av[data-key]').forEach(s => {
+    const url = IMG.known[s.dataset.key];
+    if (url && !s.querySelector('img')) {
+      s.insertAdjacentHTML('afterbegin', `<img src="${esc(url)}" alt="" loading="lazy" onerror="this.remove()">`);
+    }
+  });
+}
+
+// Ask the server for logos/photos of everything on screen. New names are looked up
+// in the background (about one every 2 seconds), so keep asking until they're done.
+async function loadImages() {
+  clearTimeout(IMG.timer);
+  const items = new Map();
+  document.querySelectorAll('.av[data-key]').forEach(s => {
+    const key = s.dataset.key;
+    if (key in IMG.known || items.has(key)) return;
+    const [kind, ...rest] = key.split('|');
+    items.set(key, { kind, name: rest.join('|'), group: s.dataset.group });
+  });
+  if (!items.size) return;
+  try {
+    const r = await fetch('/api/images', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [...items.values()] }) });
+    const res = await r.json();
+    Object.assign(IMG.known, res.images || {});
+    applyImages();
+    if (res.pending) IMG.timer = setTimeout(loadImages, 5000);
+  } catch (e) { /* pictures are optional; initials stay */ }
 }
 
 function renderAll(fresh) {

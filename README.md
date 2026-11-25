@@ -39,3 +39,9 @@ Add it to `TARGET_BOOKS` in `app.py`, using The Odds API's bookmaker key, for ex
 - The estimate comes from the betting market. It's not a guarantee. A positive EV only pays off on average over many bets.
 - Odds move fast. Check the line in the FanDuel app before you bet.
 - Futures and outrights (for example "who wins the championship") are not included.
+
+## Team logos and player photos
+
+Logos and photos come from [TheSportsDB](https://www.thesportsdb.com), a free, community-run sports database. Each name is looked up once, about one every 2.5 seconds because of the free plan's limits, and saved in `images.json`. The first scan of a new league fills its pictures in over a minute or so; after that they load instantly. Names it can't find show initials instead.
+
+Team logos are trademarks of their teams and leagues. They're fine to show in a personal tool like this, but get permission before using them on a public or paid site.
