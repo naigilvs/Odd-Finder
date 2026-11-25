@@ -1071,7 +1071,7 @@ async function logTrack() {
 }
 
 /* ---------------- Sidebar menu and pages ---------------- */
-const PAGES = { find: '#findPage', picks: '#picksView', bot: '#botView' };
+const PAGES = { find: '#findPage', picks: '#picksView', wagers: '#wagersView', bot: '#botView' };
 
 function openMenu() {
   $('#sidebar').hidden = false;
@@ -1111,6 +1111,7 @@ function showPage(page) {
   window.scrollTo(0, 0);
   if (page === 'picks') { renderPicks(); checkResults(); }
   if (page === 'bot') loadBot(true);
+  if (page === 'wagers') loadWagers();
 }
 
 $('#menuBtn').onclick = openMenu;
@@ -1216,6 +1217,92 @@ function saveLeagues() {
 function loadLeagues() {
   try { return JSON.parse(localStorage.getItem('oddfinder.leagues')); } catch (e) { return null; }
 }
+
+/* ---------------- My wagers ---------------- */
+const WAGERS = { list: [] };
+const todayLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+
+async function wagersApi(body) {
+  const r = await fetch('/api/wagers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  WAGERS.list = j.wagers || [];
+  return j;
+}
+
+async function loadWagers() {
+  if (!$('#wDate').value) $('#wDate').value = todayLocal();
+  syncWonField();
+  try { await wagersApi({ action: 'list' }); } catch (e) { setWagerStatus(e.message, true); }
+  renderWagers();
+}
+
+function syncWonField() { $('#wWonWrap').hidden = $('#wResult').value !== 'won'; }
+function setWagerStatus(msg, err) { $('#wStatus').textContent = msg; $('#wStatus').className = 'status' + (err ? ' err' : ''); }
+
+function wagerCutoff() {
+  const v = $('#wRange').value, today = todayLocal();
+  if (!v) return null;
+  if (v === 'month') return today.slice(0, 8) + '01';
+  const d = new Date(today + 'T00:00:00');
+  d.setDate(d.getDate() - (+v - 1));
+  return d.toISOString().slice(0, 10);
+}
+
+function renderWagers() {
+  const cutoff = wagerCutoff();
+  const list = WAGERS.list.filter(w => !cutoff || w.date >= cutoff);
+  const s = Calc.wagerSummary(list);
+  const tone = x => x > 0 ? 'up' : x < 0 ? 'down' : '';
+  $('#wSummary').innerHTML = list.length ? `
+    <div><b class="${tone(s.net)}">${signedDollars(s.net)}</b>${s.net >= 0 ? 'net profit' : 'net loss'}</div>
+    <div><b>${dollars(s.wagered)}</b>total wagered on ${s.count} bet${s.count === 1 ? '' : 's'}</div>
+    <div><b class="${tone(s.net)}">${s.roi != null ? signed(s.roi, 1) : '–'}</b>return on money wagered</div>
+    <div><b>${s.won}-${s.lost}${s.push ? `-${s.push}` : ''}</b>record (won-lost${s.push ? '-push' : ''})</div>` : '';
+  $('#wList').innerHTML = list.map(w => {
+    const n = Calc.wagerNet(w);
+    const word = { won: 'Won', lost: 'Lost', push: 'Push' }[w.result];
+    return `
+    <div class="pick ${w.result}">
+      <div class="pmain"><b>${esc(w.note || 'Wager')}</b>
+        <span>${new Date(w.date + 'T12:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span></div>
+      <div class="pres"><span class="badge ${w.result}">${word}</span>
+        <span class="muted small">Wagered ${dollars(w.wagered)}${w.result === 'won' ? `, won ${dollars(w.won)}` : ''}</span></div>
+      <div class="pact"><span class="${tone(n)}"><b>${signedDollars(n)}</b></span>
+        <button class="linkbtn remove" data-del="${w.id}" aria-label="Delete this wager">Delete</button></div>
+    </div>`;
+  }).join('');
+  $('#wEmpty').innerHTML = !WAGERS.list.length
+    ? '<div class="big" aria-hidden="true">💵</div><h3>No wagers logged yet</h3><p>Add the first bet you placed with the form above.</p>'
+    : !list.length ? '<h3>No wagers in this period</h3><p>Choose a longer period above to see older ones.</p>' : '';
+  $('#wEmpty').hidden = !$('#wEmpty').innerHTML;
+}
+
+$('#wResult').addEventListener('change', syncWonField);
+$('#wRange').addEventListener('change', renderWagers);
+$('#wForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const wager = { date: $('#wDate').value, note: $('#wNote').value.trim(), wagered: +$('#wWagered').value,
+                  result: $('#wResult').value, won: +$('#wWon').value || 0 };
+  if (!(wager.wagered > 0)) return setWagerStatus('Enter how much you wagered.', true);
+  if (wager.result === 'won' && !(wager.won > 0)) return setWagerStatus('Enter how much you won (your profit, not counting the stake).', true);
+  $('#wAdd').disabled = true;
+  try {
+    await wagersApi({ action: 'add', wager });
+    $('#wNote').value = ''; $('#wWagered').value = ''; $('#wWon').value = '';
+    setWagerStatus(`Added: ${wager.result === 'won' ? `won ${dollars(wager.won)}` : wager.result === 'lost' ? `lost ${dollars(wager.wagered)}` : 'push'}.`);
+    renderWagers();
+    $('#wWagered').focus();
+  } catch (err) { setWagerStatus(err.message, true); }
+  $('#wAdd').disabled = false;
+});
+$('#wList').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-del]');
+  if (!b || !confirm('Delete this wager? This can\'t be undone.')) return;
+  try { await wagersApi({ action: 'delete', id: b.dataset.del }); setWagerStatus('Wager deleted.'); }
+  catch (err) { setWagerStatus(err.message, true); }
+  renderWagers();
+});
 
 // Start the app (kept last so everything above is defined first).
 init().catch(e => { document.body.innerHTML = `<p style="padding:40px">Odd Finder couldn't start: ${esc(e.message)}</p>`; });

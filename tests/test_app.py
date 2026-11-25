@@ -146,6 +146,7 @@ class Server(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         app.PICKS = app.picks.PickStore(Path(cls.tmp.name) / "picks.json")   # never touch real picks
         app.TRACK = app.picks.TrackStore(Path(cls.tmp.name) / "track.json")
+        app.WAGERS = app.wagers.WagerStore(Path(cls.tmp.name) / "wagers.json")
         app.SCANS = app.scans.ScanStore(Path(cls.tmp.name) / "scans.json")
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
         cls.port = cls.server.server_address[1]
@@ -268,6 +269,14 @@ class Server(unittest.TestCase):
             dead_port = s.getsockname()[1]
         lock.write_text(json.dumps({"pid": 1, "port": dead_port}))
         self.assertIsNone(app.claim_data(lock, 5555))
+
+    def test_wagers(self):
+        status, body = self.post("/api/wagers", {"action": "add", "wager": {"date": "2026-11-20", "wagered": 25, "result": "won", "won": 30}})
+        self.assertEqual(status, 200)
+        wid = body["wagers"][0]["id"]
+        self.assertEqual(self.post("/api/wagers", {"action": "add", "wager": {"wagered": 0, "result": "lost"}})[0], 400)
+        self.assertEqual(len(self.post("/api/wagers", {"action": "list"})[1]["wagers"]), 1)
+        self.assertEqual(self.post("/api/wagers", {"action": "delete", "id": wid})[1]["wagers"], [])
 
     def test_config_reports_freshness(self):
         status, body = self.get("/api/config")

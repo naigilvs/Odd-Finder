@@ -18,7 +18,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 ICLOUD = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
-FILES = ["picks.json", "track.json"]
+FILES = ["picks.json", "track.json", "wagers.json"]
 CHECK_EVERY = 300            # seconds between checks for changes
 
 

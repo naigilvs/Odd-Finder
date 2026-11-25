@@ -46,6 +46,7 @@
     </div>
     <button class="side-item" data-page="find" aria-current="page"><span class="ico" aria-hidden="true">🔎</span><span>Find bets<small>Main lines and more bets</small></span></button>
     <button class="side-item" data-page="picks"><span class="ico" aria-hidden="true">★</span><span>My picks <span class="count" id="sideCount"></span><small>Bets you saved, open and settled</small></span></button>
+    <button class="side-item" data-page="wagers"><span class="ico" aria-hidden="true">💵</span><span>My wagers<small>Log what you bet and won or lost</small></span></button>
     <button class="side-item" data-page="bot"><span class="ico" aria-hidden="true">📈</span><span>Bot results<small>How the bot's predictions turned out</small></span></button>
     <div class="side-foot">
       <div class="side-backup" id="sideBackup" role="status"></div>
@@ -193,6 +194,40 @@
       </div>
       <div class="plist" id="pList"></div>
       <div class="empty" id="pEmpty"></div>
+    </div>
+
+    <!-- My wagers: the bets you actually placed, and how much you won or lost -->
+    <div id="wagersView" hidden>
+      <h2 class="page-title">My wagers</h2>
+      <p class="more-intro">Log the bets you actually placed: how much you wagered and how much you won or lost. Saved on your computer and backed up with your picks.</p>
+      <form class="wform" id="wForm" novalidate>
+        <label>Date<input type="date" id="wDate" required></label>
+        <label class="grow">What you bet on <span class="muted">(optional)</span><input id="wNote" maxlength="120" placeholder="e.g. Lakers -3.5" autocomplete="off"></label>
+        <label>Amount wagered ($)<input id="wWagered" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
+        <label>Result
+          <select id="wResult">
+            <option value="won">Won</option>
+            <option value="lost">Lost</option>
+            <option value="push">Push (stake returned)</option>
+          </select>
+        </label>
+        <label id="wWonWrap">Amount won ($)<input id="wWon" type="number" min="0.01" step="0.01" inputmode="decimal"><small>Your profit, not counting the stake</small></label>
+        <button class="btn-scan" type="submit" id="wAdd">Add wager</button>
+      </form>
+      <div class="status" id="wStatus" role="status"></div>
+      <div class="filters">
+        <label>Show
+          <select id="wRange">
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="month">This month</option>
+            <option value="" selected>All time</option>
+          </select>
+        </label>
+      </div>
+      <div class="psum" id="wSummary"></div>
+      <div class="plist" id="wList"></div>
+      <div class="empty" id="wEmpty"></div>
     </div>
 
     <!-- Bot results: every gradable bet the bot showed, and how it turned out -->

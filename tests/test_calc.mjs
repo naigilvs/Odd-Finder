@@ -89,3 +89,16 @@ test('saved picks: profit and summary', () => {
   assert.equal(s.byConf.High.winRate, 0.5);
   assert.equal(s.byConf.Medium.picks, 0);                    // pushes don't count as decided
 });
+
+test('my wagers: net and totals', () => {
+  const w = (result, wagered, won = 0) => ({ result, wagered, won });
+  assert.equal(Calc.wagerNet(w('won', 50, 45.45)), 45.45);
+  assert.equal(Calc.wagerNet(w('lost', 20)), -20);
+  assert.equal(Calc.wagerNet(w('push', 30)), 0);
+  const s = Calc.wagerSummary([w('won', 50, 45.45), w('lost', 20), w('push', 30), w('lost', 10)]);
+  assert.deepEqual([s.count, s.won, s.lost, s.push], [4, 1, 2, 1]);
+  assert.equal(s.wagered, 110);
+  assert.equal(s.net, 15.45);
+  assert.ok(Math.abs(s.roi - 15.45 / 110) < 1e-9);
+  assert.equal(Calc.wagerSummary([]).roi, null);
+});

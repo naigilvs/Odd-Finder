@@ -33,6 +33,7 @@ from pathlib import Path
 import backup
 import picks
 import scans
+import wagers
 import stats
 
 ROOT = Path(__file__).resolve().parent
@@ -445,6 +446,7 @@ class ImageFinder:
 
 IMAGES = None
 PICKS = picks.PickStore()       # saved picks, in data/picks.json
+WAGERS = wagers.WagerStore()    # the bets you actually placed, in data/wagers.json
 TRACK = picks.TrackStore()      # every gradable bet the bot showed, in data/track.json
 SCANS = scans.ScanStore(stats.DATA_DIR / "scans.json")   # your last scans, kept across restarts
 BACKUP = None                   # copies picks and track record to iCloud Drive (not in demo mode)
@@ -735,7 +737,7 @@ def demo_events(sport, target, include_props):
     return events
 
 
-CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py", ROOT / "props_stats.py"]
+CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py", ROOT / "props_stats.py", ROOT / "wagers.py"]
 _started_with = {f: f.stat().st_mtime for f in CODE_FILES if f.exists()}
 
 
@@ -883,7 +885,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans"):
+        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans", "/api/wagers"):
             return self.send_json({"error": "Not found"}, 404)
         length = int(self.headers.get("Content-Length") or 0)
         if length > 20_000_000:          # room for a full browser copy of saved scans
@@ -898,6 +900,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_picks(body)
         if path == "/api/track":
             return self.handle_track(body)
+        if path == "/api/wagers":
+            return self.handle_wagers(body)
         if path == "/api/saved-scans":
             book, action = body.get("book"), body.get("action")
             if book not in TARGET_BOOKS:
@@ -919,6 +923,24 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"stats": demo_stats(items), "pending": 0})
         found, pending = stats.predict_many(items)
         self.send_json({"stats": found, "pending": pending})
+
+    def handle_wagers(self, body):
+        """My wagers: list, add, update, delete."""
+        action = body.get("action", "list")
+        try:
+            if action == "add":
+                WAGERS.add(body.get("wager"))
+            elif action == "update":
+                WAGERS.update(str(body.get("id")), body.get("wager"))
+            elif action == "delete":
+                WAGERS.delete(str(body.get("id")))
+            elif action != "list":
+                return self.send_json({"error": "Unknown action"}, 400)
+            if action != "list":
+                backup_soon()
+            self.send_json({"wagers": WAGERS.all()})
+        except (KeyError, ValueError) as e:
+            self.send_json({"error": str(e).strip("'\"")}, 400)
 
     def handle_track(self, body):
         """Bot track record: log bets, summarize, check results, clear."""
@@ -1041,7 +1063,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global DEMO, API_KEY, IMAGES, PICKS, TRACK, BACKUP, GITBACKUP, SCANS
+    global DEMO, API_KEY, IMAGES, PICKS, TRACK, BACKUP, GITBACKUP, SCANS, WAGERS
     ap = argparse.ArgumentParser(description="Betting value finder")
     ap.add_argument("--demo", action="store_true", help="use made-up sample data")
     ap.add_argument("--port", type=int, default=8765)
@@ -1051,6 +1073,7 @@ def main():
     IMAGES = ImageFinder()
     if DEMO:   # keep made-up demo picks and results apart from real ones
         PICKS = picks.PickStore(stats.DATA_DIR / "picks_demo.json")
+        WAGERS = wagers.WagerStore(stats.DATA_DIR / "wagers_demo.json")
         TRACK = picks.TrackStore(stats.DATA_DIR / "track_demo.json")
         SCANS = scans.ScanStore(stats.DATA_DIR / "scans_demo.json")
     else:      # back up real picks and results, and restore them if they were deleted

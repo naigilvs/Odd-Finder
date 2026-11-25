@@ -113,7 +113,7 @@ Your last scan of each league, and your More bets scans, are saved by the bot in
 
 ## Menu, My picks and Bot results
 
-The **☰** button at the top left opens the menu: **Find bets** (main lines and more bets), **My picks** and **Bot results**.
+The **☰** button at the top left opens the menu: **Find bets** (main lines and more bets), **My picks**, **My wagers** and **Bot results**.
 
 ### My picks
 Click the ☆ next to any bet, or **Save pick** in its details (you can add a stake). My picks has two tabs: **Unsettled** (waiting for a result) and **Settled** (won, lost or push).
@@ -122,6 +122,9 @@ Click the ☆ next to any bet, or **Save pick** in its details (you can add a st
 - **NBA, NHL and NFL player props** (points, rebounds, assists, 3-pointers, shots on goal, yards, receptions) are also checked automatically, from the player's real stats in the box score. If an NBA or NHL player didn't play, the bet is a push (sportsbooks void it). NFL box scores only list players who recorded a stat, so if an NFL player isn't listed you mark that one yourself.
 - **Marking results yourself:** other player props, quarter/half/period bets and other sports get Won / Lost / Push buttons once the game has started. **Undo** puts a pick back to unsettled.
 - **Summary:** your record, how often your picks won compared with the bot's expected chance, the profit if you'd bet $100 on each, your real profit where you entered a stake, and a breakdown by confidence.
+
+### My wagers
+A log of the bets you actually placed. For each one, enter the date, an optional note (e.g. "Lakers -3.5"), the amount you wagered, and whether it won (plus how much you won, not counting your stake), lost, or pushed. The page shows your net profit or loss, total wagered, return on money wagered and your record, for the last 7 days, last 30 days, this month or all time. Entries are saved in `data/wagers.json` and backed up to iCloud Drive and GitHub with your picks.
 
 ### Bot results
 Every moneyline, spread, total and team total the bot shows for the NFL, NBA, NHL and MLB, and every NBA, NHL and NFL player prop it can check, is logged automatically when you scan (once per bet; a rescan updates it to the latest price) and checked after the game. The page shows:

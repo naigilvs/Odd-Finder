@@ -428,3 +428,12 @@
 
   .filter-note { margin: 0 0 12px; font-size: 14px; color: var(--amber); }
   .filter-note .linkbtn { font-size: 14px; padding: 0 2px; text-decoration: underline; }
+
+  /* ---------- my wagers ---------- */
+  .wform { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 16px; margin: 18px 0 6px; }
+  .wform label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--slate); }
+  .wform label.grow { flex: 1 1 220px; }
+  .wform input, .wform select { background: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; color: var(--chalk); min-width: 130px; }
+  .wform small { font-size: 12px; color: var(--slate); }
+  .wform .btn-scan { margin-left: auto; }

@@ -109,8 +109,25 @@
     };
   }
 
+  // ---- my wagers: what you actually bet, and won or lost
+  function wagerNet(w) {
+    return w.result === 'won' ? w.won : w.result === 'lost' ? -w.wagered : 0;
+  }
+  function wagerSummary(list) {
+    const s = { count: list.length, wagered: 0, net: 0, won: 0, lost: 0, push: 0 };
+    for (const w of list) {
+      s.wagered += w.wagered;
+      s.net += wagerNet(w);
+      s[w.result] += 1;
+    }
+    s.wagered = Math.round(s.wagered * 100) / 100;
+    s.net = Math.round(s.net * 100) / 100;
+    s.roi = s.wagered ? s.net / s.wagered : null;
+    return s;
+  }
+
   const api = { MARKET_WEIGHT, chance, agrees, confidence, CONF_RANK, betLabel, americanOdds, lineGroup, bestLines,
-                pickProfit, summarize };
+                pickProfit, summarize, wagerNet, wagerSummary };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Calc = api;
 })(this);
