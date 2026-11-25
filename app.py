@@ -812,7 +812,7 @@ class Handler(BaseHTTPRequestHandler):
         if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans"):
             return self.send_json({"error": "Not found"}, 404)
         length = int(self.headers.get("Content-Length") or 0)
-        if length > 2_000_000:
+        if length > 20_000_000:          # room for a full browser copy of saved scans
             return self.send_json({"error": "Request too large"}, 413)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -825,11 +825,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/track":
             return self.handle_track(body)
         if path == "/api/saved-scans":
-            book = body.get("book")
-            if body.get("action") != "clear_more" or book not in TARGET_BOOKS:
-                return self.send_json({"error": "Unknown action"}, 400)
-            SCANS.clear_more(book)
-            return self.send_json({"ok": True})
+            book, action = body.get("book"), body.get("action")
+            if book not in TARGET_BOOKS:
+                return self.send_json({"error": "Unknown sportsbook"}, 400)
+            if action == "clear_more":
+                SCANS.clear_more(book)
+                return self.send_json({"ok": True})
+            if action == "import":
+                results = body.get("results") if isinstance(body.get("results"), dict) else {}
+                more = body.get("more") if isinstance(body.get("more"), list) else []
+                return self.send_json(SCANS.import_browser(book, results, more))
+            return self.send_json({"error": "Unknown action"}, 400)
         items = body.get("items", [])
         items = [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
         if path == "/api/images":

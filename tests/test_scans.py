@@ -67,5 +67,42 @@ class ScanStoreTests(unittest.TestCase):
         self.assertEqual(scans.ScanStore(self.path).load("fanduel"), {"results": {}, "more": []})
 
 
+
+class BrowserImport(unittest.TestCase):
+    """Scans an older version saved in the browser are merged into the bot's copy."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = scans.ScanStore(Path(self.tmp.name) / "scans.json")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_newest_copy_of_each_league_wins(self):
+        self.store.save_main("fanduel", ["basketball_nba"], [row(sel="bot nba")])
+        bot_at = self.store.load("fanduel")["results"]["basketball_nba"]["at"]
+        merged = self.store.import_browser("fanduel", {
+            "basketball_nba": {"at": bot_at - 1000, "rows": [row(sel="older browser nba")]},    # older: ignored
+            "soccer_epl": {"at": 5, "rows": [row("soccer_epl", sel="browser epl")]},             # bot has none: added
+            "icehockey_nhl": {"at": bot_at + 1000, "rows": [row("icehockey_nhl", sel="newer")]},
+        }, [row(event="g9", sel="browser more")])
+        self.assertEqual([x["selection"] for x in merged["results"]["basketball_nba"]["rows"]], ["bot nba"])
+        self.assertEqual([x["selection"] for x in merged["results"]["soccer_epl"]["rows"]], ["browser epl"])
+        self.assertEqual([x["selection"] for x in merged["results"]["icehockey_nhl"]["rows"]], ["newer"])
+        self.assertEqual([x["selection"] for x in merged["more"]], ["browser more"])
+        # and it's saved, so it survives a restart
+        again = scans.ScanStore(self.store.path).load("fanduel")
+        self.assertIn("soccer_epl", again["results"])
+
+    def test_started_games_and_junk_are_dropped(self):
+        merged = self.store.import_browser("fanduel", {
+            "basketball_nba": {"at": 1, "rows": [row(start=GONE), "junk", row(sel="ok")]},
+            "bad": "not a league",
+        }, ["junk", row(event="g2", start=GONE)])
+        self.assertEqual([x["selection"] for x in merged["results"]["basketball_nba"]["rows"]], ["ok"])
+        self.assertNotIn("bad", merged["results"])
+        self.assertEqual(merged["more"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

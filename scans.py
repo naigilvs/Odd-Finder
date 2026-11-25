@@ -64,6 +64,23 @@ class ScanStore:
             self._prune(book)
             self._write()
 
+    def import_browser(self, book, results, more):
+        """Scans an older version saved in the browser: keep each league's newer copy,
+        and add More bets for games the bot doesn't have yet."""
+        with self.lock:
+            b = self._book(book)
+            for sport, saved in (results or {}).items():
+                if not isinstance(saved, dict) or not isinstance(saved.get("rows"), list):
+                    continue
+                mine = b["leagues"].get(sport)
+                if not mine or (saved.get("at") or 0) > (mine.get("at") or 0):
+                    b["leagues"][sport] = {"at": saved.get("at") or 0, "rows": [r for r in saved["rows"] if isinstance(r, dict)]}
+            have = {r.get("event_id") for r in b["more"]}
+            b["more"] += [r for r in (more or []) if isinstance(r, dict) and r.get("event_id") not in have]
+            self._prune(book)
+            self._write()
+            return {"results": b["leagues"], "more": b["more"]}
+
     def clear_more(self, book):
         with self.lock:
             self._book(book)["more"] = []

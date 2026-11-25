@@ -59,17 +59,24 @@ async function pickBook(key) {
 const storeKey = () => `oddfinder.results.${state.cfg.demo ? 'demo.' : ''}${state.book.key}`;
 
 // Your last scans are saved by the bot (data/scans.json), so they come back after a
-// restart with no size limit. Scans an older version saved in the browser are used
-// if the bot has none yet, then removed from the browser.
+// restart with no size limit. Scans an older version saved in the browser are handed
+// to the bot (each league keeps its newest copy), then removed from the browser.
 async function loadSavedScans() {
-  let saved = null;
-  try { saved = await getJSON(`/api/saved-scans?book=${encodeURIComponent(state.book.key)}`); } catch (e) { /* older bot */ }
   const fromBrowser = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
-  state.results = saved && Object.keys(saved.results).length ? saved.results : (fromBrowser(storeKey()) || {});
-  more.rows = saved && saved.more.length ? saved.more : (fromBrowser(moreKey()) || []);
+  const oldResults = fromBrowser(storeKey()), oldMore = fromBrowser(moreKey());
+  let saved = null;
+  try {
+    if (oldResults || oldMore) {
+      saved = await (await fetch('/api/saved-scans', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'import', book: state.book.key, results: oldResults || {}, more: oldMore || [] }) })).json();
+      if (saved && saved.results) { localStorage.removeItem(storeKey()); localStorage.removeItem(moreKey()); }
+      else saved = null;
+    }
+    if (!saved) saved = await getJSON(`/api/saved-scans?book=${encodeURIComponent(state.book.key)}`);
+  } catch (e) { saved = null; /* older bot: use the browser copy as before */ }
+  state.results = saved ? saved.results : (oldResults || {});
+  more.rows = saved ? saved.more : (oldMore || []);
   saveMore();                                     // drop games that have started
-  // Only forget the browser copy once the bot has its own copy of the scans.
-  if (saved && Object.keys(saved.results).length) { localStorage.removeItem(storeKey()); localStorage.removeItem(moreKey()); }
 }
 
 /* ---------------- tabs + leagues ---------------- */
