@@ -4,7 +4,6 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -25,13 +24,12 @@ class Backups(unittest.TestCase):
     def write(self, name, items):
         (self.data / name).write_text(json.dumps(items))
 
-    def test_backs_up_latest_and_a_daily_copy(self):
+    def test_backs_up_only_the_latest_copy(self):
         self.write("picks.json", [{"id": 1}])
         self.write("config.json", [{"key": "secret"}])                 # never backed up
-        day = date(2026, 11, 25)
-        self.assertEqual(self.b.run(today=day), ["picks.json"])
+        self.assertEqual(self.b.run(), ["picks.json"])
         self.assertEqual(json.loads((self.cloud / "latest" / "picks.json").read_text()), [{"id": 1}])
-        self.assertTrue((self.cloud / "daily" / "2026-11-25" / "picks.json").exists())
+        self.assertEqual([p.name for p in self.cloud.iterdir()], ["latest"])   # no daily copies
         self.assertFalse(list(self.cloud.rglob("config.json")))
         self.assertIsNotNone(self.b.status()["last"])
 
@@ -53,18 +51,19 @@ class Backups(unittest.TestCase):
         self.assertEqual(self.b.run(), [])
         self.assertEqual(json.loads((self.cloud / "latest" / "picks.json").read_text()), [{"id": 1}])
 
-    def test_daily_copies_older_than_30_days_are_removed(self):
+    def test_old_daily_copies_are_tidied_away(self):
         self.write("picks.json", [{"id": 1}])
-        today = date(2026, 11, 25)
-        old = self.cloud / "daily" / (today - timedelta(days=31)).isoformat()
-        keep = self.cloud / "daily" / (today - timedelta(days=29)).isoformat()
+        old = self.cloud / "daily" / "2026-11-20"
         other = self.cloud / "daily" / "my notes"
-        for d in (old, keep, other):
+        for d in (old, other):
             d.mkdir(parents=True)
-        self.b.run(today=today)
+        self.b.run()
         self.assertFalse(old.exists())
-        self.assertTrue(keep.exists())
         self.assertTrue(other.exists())                                  # not ours: left alone
+        other.rmdir()
+        self.b._seen.clear()
+        self.b.run()
+        self.assertFalse((self.cloud / "daily").exists())                # empty folder removed too
 
     def test_restores_missing_files_only(self):
         self.write("picks.json", [{"id": 1}])

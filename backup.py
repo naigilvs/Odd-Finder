@@ -2,13 +2,11 @@
 Backups to iCloud Drive
 -----------------------
 Saved picks and the bot's track record are copied to an "Odd Finder backups"
-folder in iCloud Drive, so they survive if the data folder is deleted:
-
-    Odd Finder backups/latest/          newest copy of each file
-    Odd Finder backups/daily/YYYY-MM-DD the copy from each day, kept for 30 days
+folder in iCloud Drive within minutes of changing, so they survive if the data
+folder is deleted. Only the newest copy is kept (Odd Finder backups/latest/):
+the GitHub backup below keeps every older version, so iCloud stays tiny.
 
 If a file is missing when the bot starts, it's restored from the latest backup.
-Older copies stay in daily/ for 30 days, e.g. to undo a Clear history by mistake.
 Your API key (config.json) is never backed up. To use another folder (Dropbox,
 Google Drive...), set "backup_folder" in config.json.
 """
@@ -16,12 +14,11 @@ import json
 import shutil
 import threading
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 ICLOUD = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
 FILES = ["picks.json", "track.json"]
-KEEP_DAYS = 30
 CHECK_EVERY = 300            # seconds between checks for changes
 
 
@@ -69,11 +66,10 @@ class Backup:
                 restored.append(name)
         return restored
 
-    def run(self, today=None):
+    def run(self):
         """Copy changed files to the backup folder. Returns the names backed up."""
         if not self.enabled:
             return []
-        today = today or date.today()
         done = []
         with self.lock:
             try:
@@ -87,10 +83,9 @@ class Backup:
                     if not _readable(src):
                         continue                         # never replace a good backup with a broken file
                     _copy(src, self.folder / "latest" / name)
-                    _copy(src, self.folder / "daily" / today.isoformat() / name)
                     self._seen[name] = mtime
                     done.append(name)
-                self._prune(today)
+                self._remove_daily()
                 if done:
                     self.last = datetime.now(timezone.utc).isoformat()
                 self.error = None
@@ -98,17 +93,21 @@ class Backup:
                 self.error = f"Couldn't back up: {e.strerror or e}"
         return done
 
-    def _prune(self, today):
+    def _remove_daily(self):
+        """Earlier versions kept a copy per day in daily/. GitHub keeps history now, so
+        remove those dated copies (anything else in the folder is left alone)."""
         daily = self.folder / "daily"
         if not daily.is_dir():
             return
-        cutoff = today - timedelta(days=KEEP_DAYS)
         for d in daily.iterdir():
             try:
-                if d.is_dir() and date.fromisoformat(d.name) < cutoff:
-                    shutil.rmtree(d)
+                date.fromisoformat(d.name)
             except ValueError:
                 continue                                 # not one of ours: leave it alone
+            if d.is_dir():
+                shutil.rmtree(d)
+        if not any(daily.iterdir()):
+            daily.rmdir()
 
     def start(self):
         """Back up now, then check for changes every few minutes in the background."""
