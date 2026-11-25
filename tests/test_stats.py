@@ -102,5 +102,16 @@ class Model(unittest.TestCase):
         self.assertIn("reason", self.lg.predict(dict(market="h2h", outcome="X", home="Unknown FC", away="Nobody")))
 
 
+class SeasonCarryOver(unittest.TestCase):
+    def test_first_game_of_a_new_season_uses_the_carried_over_rating(self):
+        m = stats.Model(stats.LEAGUES["basketball_nba"])
+        m.elo.update({"Good": 1700.0, "Bad": 1300.0})
+        m.season_of.update({"Good": 2026, "Bad": 2026})
+        m.latest_season = 2026
+        full = m.elo_diff("Good", "Bad", neutral=True)
+        m.latest_season = 2027                                   # new season started elsewhere
+        self.assertAlmostEqual(m.elo_diff("Good", "Bad", neutral=True), full * m.carry)
+
+
 if __name__ == "__main__":
     unittest.main()

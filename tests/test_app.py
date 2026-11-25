@@ -158,7 +158,7 @@ class Server(unittest.TestCase):
 
     def post(self, path, body):
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"}, method="POST")
+                                     headers={"Content-Type": "application/json", "X-Odd-Finder": "1"}, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status, json.load(r)
@@ -178,9 +178,11 @@ class Server(unittest.TestCase):
         self.assertEqual(self.post("/api/picks", {"action": "save", "pick": {"selection": "x"}})[0], 400)
         self.assertEqual(self.post("/api/picks", {"action": "delete", "id": pid})[1]["picks"], [])
 
-    def get(self, path):
+    def get(self, path, headers=None):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}",
+                                     headers={"X-Odd-Finder": "1", **(headers or {})})
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=10) as r:
+            with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status, json.load(r)
         except urllib.error.HTTPError as e:
             return e.code, json.load(e)
@@ -230,6 +232,42 @@ class Server(unittest.TestCase):
         self.assertEqual(self.post("/api/saved-scans", {"action": "clear_more", "book": "fanduel"})[0], 200)
         self.assertEqual(self.get("/api/saved-scans?book=fanduel")[1]["more"], [])
         self.assertEqual(self.get("/api/saved-scans?book=nope")[0], 400)
+
+    def test_other_websites_are_refused(self):
+        self.assertEqual(self.get("/api/config", {"Origin": "http://evil.example"})[0], 403)
+        self.assertEqual(self.get("/api/config", {"Host": f"evil.example:{self.port}"})[0], 403)   # DNS rebinding
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/scan?book=fanduel&sports=basketball_nba")
+        with self.assertRaises(urllib.error.HTTPError) as no_marker:                               # e.g. an <img> tag
+            urllib.request.urlopen(req, timeout=10)
+        self.assertEqual(no_marker.exception.code, 403)
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/track", data=b'{"action":"clear"}',
+                                     headers={"Content-Type": "text/plain"}, method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as post:
+            urllib.request.urlopen(req, timeout=10)
+        self.assertEqual(post.exception.code, 403)
+
+    def test_own_page_still_loads_and_its_origin_is_allowed(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/", timeout=10) as r:
+            self.assertEqual(r.status, 200)
+        self.assertEqual(self.get("/api/config", {"Origin": f"http://localhost:{self.port}"})[0], 200)
+
+    def test_bad_requests_get_an_answer(self):
+        status, body = self.get("/api/scan?book=fanduel&sports=basketball_nba&min_books=abc")
+        self.assertEqual(status, 400)
+        self.assertIn("Bad request", body["error"])
+
+    def test_only_one_live_copy_uses_the_data(self):
+        import socket
+        lock = Path(self.tmp.name) / "running.lock"
+        self.assertIsNone(app.claim_data(lock, 1234))                     # first copy claims it
+        self.assertIsNone(app.claim_data(lock, 1234))                     # same copy again: fine
+        lock.write_text(json.dumps({"pid": 1, "port": self.port}))        # another live copy (pid 1 always exists)
+        self.assertEqual(app.claim_data(lock, 5555), self.port)
+        with socket.socket() as s:                                         # a leftover lock for a port nobody serves
+            s.bind(("127.0.0.1", 0))
+            dead_port = s.getsockname()[1]
+        lock.write_text(json.dumps({"pid": 1, "port": dead_port}))
+        self.assertIsNone(app.claim_data(lock, 5555))
 
     def test_config_reports_freshness(self):
         status, body = self.get("/api/config")

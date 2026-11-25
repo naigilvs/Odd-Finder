@@ -168,6 +168,44 @@ class ApiError(Exception):
     pass
 
 
+def claim_data(lock_file, port):
+    """Only one live copy of the bot may use the data folder at a time; two would overwrite
+    each other's saved picks and track record. Returns None once this copy has claimed it,
+    or the other copy's port if one is already running."""
+    import atexit
+    import os
+    import socket
+    try:
+        other = json.loads(lock_file.read_text())
+        pid, other_port = int(other["pid"]), int(other["port"])
+        if pid != os.getpid():
+            try:
+                os.kill(pid, 0)                         # is that process still alive?
+                alive = True
+            except PermissionError:
+                alive = True
+            except OSError:
+                alive = False
+            if alive:
+                with socket.socket() as sock:           # ...and is it really serving?
+                    sock.settimeout(1)
+                    if sock.connect_ex(("127.0.0.1", other_port)) == 0:
+                        return other_port
+    except (OSError, ValueError, KeyError, TypeError):
+        pass                                            # no lock, or a leftover one: take over
+    lock_file.parent.mkdir(exist_ok=True)
+    lock_file.write_text(json.dumps({"pid": os.getpid(), "port": port}))
+
+    def release():
+        try:
+            if json.loads(lock_file.read_text()).get("pid") == os.getpid():
+                lock_file.unlink()
+        except (OSError, ValueError):
+            pass
+    atexit.register(release)
+    return None
+
+
 def load_config():
     try:
         cfg = json.loads((ROOT / "config.json").read_text())
@@ -807,7 +845,43 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # ---- safety checks for every request -------------------------------------------
+    # Only this computer's own page may control the bot. Other websites you visit could
+    # otherwise make your browser send it commands (spend credits, delete picks), and a
+    # trick called DNS rebinding could reach it under another site name.
+    def _blocked(self, needs_marker):
+        port = self.server.server_address[1]
+        own = {f"localhost:{port}", f"127.0.0.1:{port}", f"[::1]:{port}"}
+        if self.headers.get("Host", "") not in own:
+            return "Requests must use the bot's own address (http://localhost:%d)." % port
+        origin = self.headers.get("Origin")
+        if origin and origin.replace("http://", "", 1) not in own:
+            return "Requests from other websites aren't allowed."
+        if needs_marker and self.headers.get("X-Odd-Finder") != "1":
+            return "Requests must come from the Odd Finder page."
+        return None
+
+    def _safely(self, handler, needs_marker):
+        why = self._blocked(needs_marker)
+        if why:
+            return self.send_json({"error": why}, 403)
+        try:
+            handler()
+        except (ValueError, TypeError) as e:          # e.g. a malformed number in the request
+            self.send_json({"error": f"Bad request: {e}"}, 400)
+        except BrokenPipeError:
+            pass                                         # the page went away before the reply
+        except Exception as e:                           # never leave the page without an answer
+            self.send_json({"error": f"Something went wrong: {e}"}, 500)
+
     def do_POST(self):
+        self._safely(self._post, needs_marker=True)
+
+    def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path
+        self._safely(self._get, needs_marker=path.startswith("/api/"))
+
+    def _post(self):
         path = urllib.parse.urlparse(self.path).path
         if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans"):
             return self.send_json({"error": "Not found"}, 404)
@@ -887,7 +961,7 @@ class Handler(BaseHTTPRequestHandler):
         except (KeyError, ValueError) as e:
             self.send_json({"error": str(e).strip("'\"")}, 400)
 
-    def do_GET(self):
+    def _get(self):
         url = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(url.query)
         try:
@@ -980,6 +1054,11 @@ def main():
         TRACK = picks.TrackStore(stats.DATA_DIR / "track_demo.json")
         SCANS = scans.ScanStore(stats.DATA_DIR / "scans_demo.json")
     else:      # back up real picks and results, and restore them if they were deleted
+        other = claim_data(stats.DATA_DIR / "running.lock", args.port)
+        if other:
+            raise SystemExit(f"Odd Finder is already running at http://localhost:{other}\n"
+                             f"Use that one, or stop it first (Ctrl+C in its Terminal window). Running two\n"
+                             f"copies at once could make them overwrite each other's saved picks and results.")
         cfg = load_config()
         folder = cfg.get("backup_folder")
         BACKUP = backup.Backup(stats.DATA_DIR, Path(folder).expanduser() if folder else backup.default_folder())

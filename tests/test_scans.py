@@ -1,5 +1,4 @@
 """Tests for saved scans (scans.py)."""
-import json
 import sys
 import tempfile
 import unittest

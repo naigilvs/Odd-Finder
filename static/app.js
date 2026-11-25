@@ -1,3 +1,8 @@
+// Every request to the bot carries this marker. Other websites can't add it to requests
+// they make, so the bot refuses commands that don't come from this page.
+const _fetch = window.fetch.bind(window);
+window.fetch = (url, opts = {}) => _fetch(url, { ...opts, headers: { ...(opts.headers || {}), 'X-Odd-Finder': '1' } });
+
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const pct = (x, d = 1) => (x * 100).toFixed(d) + '%';

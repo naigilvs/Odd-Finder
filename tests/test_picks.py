@@ -273,5 +273,34 @@ class PropGrading(unittest.TestCase):
         self.assertEqual(track.all(), [])                                         # left out of the record
 
 
+class PostponedGames(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_no_result_after_3_days_is_handed_to_you(self):
+        store = picks.PickStore(Path(self.dir.name) / "picks.json")
+        long_ago = (datetime.now(timezone.utc) - timedelta(days=4)).isoformat()
+        store.save(pick(start=long_ago))
+        store.save(pick(event_id="g2"))                                   # 1 day ago: keep waiting
+        nothing = lambda *a, **k: None
+        self.assertEqual(store.grade_pending(refresh=False, find=nothing, find_stat=nothing), 1)
+        by = {p["event_id"]: p for p in store.all()}
+        self.assertEqual((by["g1"]["status"], by["g1"]["auto"]), ("pending", False))
+        self.assertIn("postponed or cancelled", by["g1"]["final"])
+        self.assertTrue(by["g2"]["auto"])
+        self.assertEqual(store.grade_pending(refresh=False, find=nothing, find_stat=nothing), 0)   # not re-counted
+        self.assertFalse(picks.PickStore(store.path).all()[0]["auto"])                            # stays yours after a restart
+
+    def test_track_record_leaves_them_out(self):
+        track = picks.TrackStore(Path(self.dir.name) / "track.json")
+        track.log([pick(start=FUTURE)])
+        later = datetime.now(timezone.utc) + timedelta(days=5)
+        track.grade_pending(refresh=False, find=lambda *a, **k: None, find_stat=lambda *a, **k: None, now=later)
+        self.assertEqual(track.all(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

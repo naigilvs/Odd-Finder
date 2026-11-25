@@ -219,6 +219,7 @@ class Model:
         self.carry = cfg["carry"]
         self.alpha = 1 - 0.5 ** (1 / cfg["half_life"])   # weight of the newest game
         self.elo, self.season_of = {}, {}
+        self.latest_season = 0                           # newest season seen so far
         self.scored, self.allowed = {}, {}               # team -> weighted avg points
         self.league_pts, self.home_edge = None, 0.0      # avg points per team-game, home - away
         self.recent = {}                                 # team -> last results ("W"/"L"/"T")
@@ -232,8 +233,16 @@ class Model:
         self.season_of[team] = season
         return r
 
+    def current(self, team):
+        """A team's rating now. One that hasn't played yet this season still gets the
+        between-seasons pull toward average, as it will when it plays."""
+        r = self.elo.get(team, 1500.0)
+        if team in self.season_of and self.season_of[team] < self.latest_season:
+            r = 1500 + (r - 1500) * self.carry
+        return r
+
     def elo_diff(self, home, away, neutral=False):
-        return self.elo.get(home, 1500.0) - self.elo.get(away, 1500.0) + (0 if neutral else self.home)
+        return self.current(home) - self.current(away) + (0 if neutral else self.home)
 
     @staticmethod
     def win_prob(diff):
@@ -258,6 +267,7 @@ class Model:
 
     def play(self, g):
         h, a, season = g["home"], g["away"], g["season"]
+        self.latest_season = max(self.latest_season, season)
         rh, ra = self._rating(h, season), self._rating(a, season)
         self.elo[h], self.elo[a] = rh, ra
         diff = rh - ra + (0 if g["neutral"] else self.home)

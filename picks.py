@@ -8,7 +8,6 @@ NHL and MLB are graded automatically from the final score. Everything else
 """
 import json
 import threading
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -16,6 +15,7 @@ import stats
 
 PICKS_FILE = stats.DATA_DIR / "picks.json"
 GRADE_AFTER = timedelta(hours=3)            # a game should be over this long after it starts
+GIVE_UP_AFTER = timedelta(days=3)           # no result by then: postponed or cancelled, so you mark it
 AUTO_MARKETS = {"h2h", "spreads", "totals", "team_totals"}
 PERIOD_ENDINGS = ("_q1", "_q2", "_q3", "_q4", "_h1", "_h2", "_p1", "_p2", "_p3", "_innings")
 STATUSES = {"pending", "won", "lost", "push"}
@@ -128,7 +128,7 @@ class PickStore:
         except (OSError, ValueError):
             self.picks = []
         for p in self.picks:                  # picks saved before a bet type became automatic
-            if p.get("status") == "pending":
+            if p.get("status") == "pending" and not p.get("final"):
                 p["auto"] = auto_gradable(p)
 
     def _write(self):
@@ -172,6 +172,17 @@ class PickStore:
             self._write()
             return p
 
+    def _give_up(self, p, note="Result not found (postponed or cancelled?): mark it yourself"):
+        """Stop checking a pick automatically: you mark it (the track record just leaves it out)."""
+        with self.lock:
+            if self.drop_unknown:
+                if p in self.picks:
+                    self.picks.remove(p)
+            else:
+                p["auto"] = False
+                p["final"] = note
+        return 1
+
     def delete(self, pid):
         with self.lock:
             before = len(self.picks)
@@ -183,7 +194,7 @@ class PickStore:
         """Grade every finished, automatically gradable pick. Returns how many were graded."""
         now = now or datetime.now(timezone.utc)
         with self.lock:
-            todo = [p for p in self.picks if p["status"] == "pending" and auto_gradable(p)
+            todo = [p for p in self.picks if p["status"] == "pending" and p.get("auto") and auto_gradable(p)
                     and datetime.fromisoformat(p["start"].replace("Z", "+00:00")) + GRADE_AFTER < now]
         graded = 0
         refreshed = set()
@@ -191,18 +202,16 @@ class PickStore:
             sport = p["sport_key"]
             fresh = refresh and sport not in refreshed
             refreshed.add(sport)
+            stale = datetime.fromisoformat(p["start"].replace("Z", "+00:00")) + GIVE_UP_AFTER < now
             if p.get("player"):                       # player prop: the player's real stat
                 found = find_stat(sport, p["market"], p["player"], p["home_team"], p["away_team"], p["start"], refresh=fresh)
                 if found is None:
+                    if stale:
+                        graded += self._give_up(p)
                     continue
                 how, value = found
                 if how == "unknown":                  # can't tell from the box score
-                    with self.lock:
-                        if self.drop_unknown:
-                            self.picks.remove(p)
-                        else:
-                            p["auto"] = False         # you mark it
-                        graded += 1
+                    graded += self._give_up(p, "Couldn't tell from the box score: mark it yourself")
                     continue
                 if how == "did_not_play":
                     update = {"status": "push", "final": f"{p['player']} didn't play: bet void, stake returned"}
@@ -212,6 +221,8 @@ class PickStore:
             else:
                 score = find(sport, p["home_team"], p["away_team"], p["start"], refresh=fresh)
                 if score is None:
+                    if stale:
+                        graded += self._give_up(p)
                     continue
                 outcome = grade(p, *score)
                 if outcome is None:
