@@ -67,3 +67,21 @@ The **More bets** switch at the top opens a separate section for alternate lines
 3. Filter the results by league, game, player or team, bet type and confidence. Click any bet for the full explanation.
 
 Results are saved in your browser until the games start. Alternate lines and team totals also get a stats opinion. Yes/no props where books only offer "Yes" can't have their margin removed exactly, so the bot estimates it (about 10%) and marks them Low confidence.
+
+## Files
+
+- `app.py`: the server: downloads odds, values every bet, and serves the page.
+- `stats.py`: the stats second opinion from past results.
+- `static/index.html`, `static/app.css`, `static/app.js`: the page's layout, styling and behavior.
+- `static/calc.js`: the page's calculations (chance of success, confidence, best line per bet).
+- `tests/`: automated tests.
+
+## Tests
+
+Run every test with one command. It needs no internet or API key; the page tests need Node.js.
+
+```bash
+./run_tests.sh
+```
+
+They check the valuation math (margin removal, value, matching lines across books, yes/no margins), bet labels, the stats model, the page's calculations, and the More bets safety checks.

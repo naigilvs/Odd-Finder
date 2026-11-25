@@ -455,6 +455,15 @@ def describe(market, outcome):
     return f"{text}, {period}" if period else text
 
 
+def yes_no_margin(blines, market):
+    """A book's average margin on the two-sided (Yes/No, Over/Under) lines it offers for
+    one bet type in this game, or None if it only offers one side everywhere."""
+    holds = [sum(1.0 / o["price"] for o in line.values()) - 1
+             for k, line in blines.items() if k[0] == market and len(line) == 2]
+    holds = [h for h in holds if 0 < h < 0.5]          # ignore broken or extreme lines
+    return sum(holds) / len(holds) if holds else None
+
+
 def analyze_event(event, target, min_books):
     home = event.get("home_team")
     tbook = next((b for b in event["bookmakers"] if b["key"] == target), None)
@@ -467,7 +476,7 @@ def analyze_event(event, target, min_books):
         names = set(outs)
         one_sided = len(outs) == 1          # e.g. anytime touchdown: only "Yes" is offered
         weighted = {n: 0.0 for n in names}
-        total_w, used, estimated = 0.0, [], False
+        total_w, used, estimated, measured = 0.0, [], False, False
         compare = {n: [] for n in names}    # each other book's price for each side
         for bkey, btitle, blines in others:
             line = blines.get(key)
@@ -479,9 +488,15 @@ def analyze_event(event, target, min_books):
                     continue
                 if len(line) >= 2:
                     probs = {n: devig(line)[n]}
-                else:                       # margin can't be removed exactly: estimate it
-                    probs = {n: (1.0 / line[n]["price"]) / (1 + ONE_SIDED_MARGIN)}
-                    estimated = True
+                else:
+                    # Only "Yes" here. Use this book's real margin on the same bet type for
+                    # players where it offers both sides; guess only if there are none.
+                    margin = yes_no_margin(blines, key[0])
+                    if margin is None:
+                        margin, estimated = ONE_SIDED_MARGIN, True
+                    else:
+                        measured = True
+                    probs = {n: (1.0 / line[n]["price"]) / (1 + margin)}
             elif set(line) == names:
                 probs = devig(line)
             else:
@@ -520,7 +535,8 @@ def analyze_event(event, target, min_books):
                 "market_label": market_label(market),
                 "selection": describe(market, o),
                 "labeled": True,             # selection already names the stat/period
-                "estimated": estimated,
+                "estimated": estimated,      # margin guessed for at least one book
+                "margin_measured": measured and not estimated,
                 "decimal": price,
                 "american": american(price),
                 "book_prob": round(1.0 / price, 4),
@@ -580,6 +596,32 @@ DEMO_BOOKS = [("fanduel", "FanDuel"), ("pinnacle", "Pinnacle"), ("draftkings", "
               ("betmgm", "BetMGM"), ("williamhill_us", "Caesars"), ("betrivers", "BetRivers")]
 
 
+# Realistic made-up numbers per league: (spread low, high, total low, high).
+DEMO_LINES = {
+    "basketball_nba": (1, 12, 212, 238), "basketball_ncaab": (1, 15, 130, 158),
+    "americanfootball_nfl": (1, 10, 37, 52), "americanfootball_ncaaf": (1, 21, 42, 64),
+    "icehockey_nhl": (1, 2, 5, 7), "baseball_mlb": (1, 2, 7, 10),
+    "soccer_epl": (0, 2, 2, 4), "soccer_uefa_champs_league": (0, 2, 2, 4),
+    "mma_mixed_martial_arts": (1, 4, 1, 3), "default": (1, 8, 40, 60),
+}
+# Typical player prop lines: (low, high).
+DEMO_PROP_LINES = {
+    "player_points": (8, 30), "player_rebounds": (3, 12), "player_assists": (2, 10), "player_threes": (1, 5),
+    "player_pass_yds": (180, 300), "player_rush_yds": (30, 95), "player_reception_yds": (25, 85),
+    "player_receptions": (2, 8), "batter_hits": (0, 2), "batter_total_bases": (1, 3),
+    "pitcher_strikeouts": (4, 8), "player_shots_on_goal": (1, 5),
+}
+
+
+# Same stat name, different sport: NHL "points" are goals + assists, so far smaller.
+DEMO_PROP_LINES_BY_SPORT = {("icehockey", "player_points"): (0, 2)}
+
+
+def demo_prop_line(rng, market, sport=""):
+    lo, hi = DEMO_PROP_LINES_BY_SPORT.get((sport.split("_")[0], market)) or DEMO_PROP_LINES.get(market, (3, 20))
+    return math.floor(rng.uniform(lo, hi)) + 0.5
+
+
 def demo_events(sport, target, include_props):
     rng = random.Random(sport)
     soccer = sport.startswith("soccer")
@@ -588,9 +630,11 @@ def demo_events(sport, target, include_props):
         home, away = rng.sample(DEMO_TEAMS, 2)
         start = (datetime.now(timezone.utc) + timedelta(hours=3 + i * 7)).isoformat()
         p_home = rng.uniform(0.3, 0.7)
-        spread = round(rng.uniform(1, 9) * 2) / 2
-        total = round(rng.uniform(40, 230) * 2) / 2
-        prop_lines = [(rng.choice(DEMO_PLAYERS), "player_points", round(rng.uniform(8, 30)) + 0.5)
+        lo_s, hi_s, lo_t, hi_t = DEMO_LINES.get(sport, DEMO_LINES["default"])
+        spread = math.floor(rng.uniform(lo_s, hi_s)) + 0.5
+        total = math.floor(rng.uniform(lo_t, hi_t)) + 0.5
+        prop_market = (PROP_MARKETS.get(sport) or ["player_points"])[0]
+        prop_lines = [(rng.choice(DEMO_PLAYERS), prop_market, demo_prop_line(rng, prop_market, sport))
                       for _ in range(2)]
         books = []
         for key, title in DEMO_BOOKS:
@@ -662,9 +706,10 @@ def demo_more_event(sport, eid, markets):
         if base == "h2h":
             spec.append((m, [{"name": home, "p": p_home}, {"name": away, "p": 1 - p_home}]))
         elif base == "spreads":
-            for pt in ([spread - 4, spread + 3, spread + 7] if alt else [spread * scale]):
+            unit = max(1.0, total * 0.015)         # one "step" of points for this sport
+            for pt in ([spread - unit, spread + unit, spread + 2 * unit] if alt else [spread * scale]):
                 pt = half(max(pt, 0.5))
-                p = min(max(0.5 + (spread * scale - pt) * 0.035, 0.05), 0.95)
+                p = min(max(0.5 + (spread * scale - pt) * 0.12 / unit, 0.05), 0.95)
                 spec.append((m, [{"name": home, "point": -pt, "p": p}, {"name": away, "point": pt, "p": 1 - p}]))
         elif base == "totals":
             for pt in ([total * scale - total * 0.06, total * scale + total * 0.06] if alt else [total * scale]):
@@ -689,7 +734,7 @@ def demo_more_event(sport, eid, markets):
                 spec.append((m, [{"name": "Yes", "description": pl, "p": rng.uniform(0.12, 0.55)}]))
         elif is_player_market(m):
             for pl in players[:2]:
-                pt = half(rng.uniform(3, 28))
+                pt = demo_prop_line(rng, m, sport)
                 spec.append((m, [{"name": "Over", "point": pt, "description": pl, "p": 0.5},
                                  {"name": "Under", "point": pt, "description": pl, "p": 0.5}]))
 
@@ -767,6 +812,7 @@ class Handler(BaseHTTPRequestHandler):
                 body = (ROOT / "static" / "index.html").read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")   # always get the latest page
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -778,6 +824,7 @@ class Handler(BaseHTTPRequestHandler):
                 body = f.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", types[f.suffix])
+                self.send_header("Cache-Control", "no-cache")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)

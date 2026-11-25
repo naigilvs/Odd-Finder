@@ -1,0 +1,744 @@
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const pct = (x, d = 1) => (x * 100).toFixed(d) + '%';
+const signed = (x, d = 1) => (x > 0 ? '+' : '') + (x * 100).toFixed(d) + '%';
+const when = iso => new Date(iso).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
+
+const ICONS = { 'American Football': '🏈', 'Basketball': '🏀', 'Baseball': '⚾', 'Ice Hockey': '🏒', 'Soccer': '⚽',
+  'Tennis': '🎾', 'Mixed Martial Arts': '🥊', 'Boxing': '🥊', 'Golf': '⛳', 'Cricket': '🏏', 'Rugby League': '🏉',
+  'Rugby Union': '🏉', 'Aussie Rules': '🏉', 'Lacrosse': '🥍', 'Handball': '🤾', 'Politics': '🗳️' };
+const TAB_NAMES = { 'American Football': 'Football', 'Ice Hockey': 'Hockey', 'Mixed Martial Arts': 'MMA' };
+const TAB_ORDER = ['American Football', 'Basketball', 'Ice Hockey', 'Baseball', 'Soccer', 'Mixed Martial Arts', 'Boxing', 'Tennis', 'Golf'];
+const POPULAR = ['americanfootball_nfl', 'americanfootball_ncaaf', 'basketball_nba', 'basketball_ncaab', 'icehockey_nhl', 'baseball_mlb'];
+const CREDITS_PER_LEAGUE = 3;
+
+const state = {
+  cfg: null, book: null, sports: [], groupOf: {}, tab: 'all',
+  picked: new Set(),          // leagues ticked for scanning
+  results: {},                // sport_key -> { rows, at }
+};
+
+async function getJSON(url) {
+  const r = await fetch(url);
+  const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+/* ---------------- start screen ---------------- */
+function showStart() {
+  $('#app').hidden = true;
+  $('#start').hidden = false;
+  const live = state.cfg.books.map(b =>
+    `<button class="ticket live" data-book="${b.key}"><b>${esc(b.name)}</b><small>Ready to scan</small></button>`);
+  const soon = state.cfg.coming_soon.map(n =>
+    `<button class="ticket" disabled><b>${esc(n)}</b><small>Coming soon</small></button>`);
+  $('#bookList').innerHTML = live.concat(soon).join('');
+  $('#startNote').textContent = state.cfg.demo ? 'You’re in demo mode, so odds are made up until you add an API key.' : '';
+  document.querySelectorAll('.ticket.live').forEach(b => b.onclick = () => pickBook(b.dataset.book));
+}
+
+function pickBook(key) {
+  state.book = state.cfg.books.find(b => b.key === key);
+  localStorage.setItem('oddfinder.book', key);
+  state.results = JSON.parse(localStorage.getItem(storeKey()) || '{}');
+  try { more.rows = JSON.parse(localStorage.getItem(moreKey()) || '[]'); } catch (e) { more.rows = []; }
+  saveMore();   // drops games that have already started
+  $('#start').hidden = true;
+  $('#app').hidden = false;
+  $('#bookName').textContent = state.book.name;
+  $('#demoBar').hidden = !state.cfg.demo;
+  // Old servers don't send `outdated`; a page newer than its server is the same problem.
+  $('#restartBar').hidden = !(state.cfg.outdated || !('outdated' in state.cfg));
+  renderAll();
+}
+
+const storeKey = () => `oddfinder.results.${state.cfg.demo ? 'demo.' : ''}${state.book.key}`;
+
+/* ---------------- tabs + leagues ---------------- */
+function groups() {
+  const gs = [...new Set(state.sports.map(s => s.group))];
+  return gs.sort((a, b) => (TAB_ORDER.indexOf(a) + 1 || 99) - (TAB_ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
+}
+const leaguesInTab = () => state.sports.filter(s => state.tab === 'all' || s.group === state.tab);
+// A league's bets are shown when it's in the open tab and its league button is ticked.
+const shown = (k, g = state.tab) => (g === 'all' || state.groupOf[k] === g) && state.picked.has(k);
+const rowsInTab = () => Object.entries(state.results)
+  .filter(([k]) => shown(k))
+  .flatMap(([, v]) => v.rows);
+
+function renderTabs() {
+  const count = g => Object.entries(state.results).filter(([k]) => shown(k, g))
+    .reduce((n, [, v]) => n + v.rows.filter(r => r.ev > 0).length, 0);
+  const tab = (g, label, ico) => {
+    const c = count(g);
+    return `<button role="tab" data-g="${esc(g)}" aria-selected="${state.tab === g}">
+      <span class="ico" aria-hidden="true">${ico}</span>${esc(label)}${c ? `<span class="count" title="Bets with positive value">${c}</span>` : ''}</button>`;
+  };
+  $('#tabs').innerHTML = tab('all', 'All sports', '🏟️') + groups().map(g => tab(g, TAB_NAMES[g] || g, ICONS[g] || '🏟️')).join('');
+  document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => { state.tab = b.dataset.g; renderAll(); });
+}
+
+function renderLeagues() {
+  $('#leagues').innerHTML = leaguesInTab().map(s => `
+    <label class="chip"><input type="checkbox" value="${s.key}" ${state.picked.has(s.key) ? 'checked' : ''}><span>${esc(s.title)}</span></label>`).join('');
+  document.querySelectorAll('#leagues input').forEach(i => i.onchange = () => {
+    i.checked ? state.picked.add(i.value) : state.picked.delete(i.value);
+    renderScanButton();
+    renderTabs();
+    renderResults();
+  });
+  renderScanButton();
+}
+
+function scanTargets() { return leaguesInTab().map(s => s.key).filter(k => state.picked.has(k)); }
+
+function renderScanButton() {
+  const n = scanTargets().length;
+  const cost = state.cfg.demo ? '' : `<small>about ${n * CREDITS_PER_LEAGUE}${$('#props').checked ? '+' : ''} credits</small>`;
+  $('#scan').innerHTML = n ? `Scan ${n} league${n > 1 ? 's' : ''}${cost}` : 'Pick a league';
+  $('#scan').disabled = !n;
+}
+
+/* ---------------- scanning ---------------- */
+async function scan() {
+  const sports = scanTargets();
+  if (!sports.length) return;
+  $('#scan').disabled = true;
+  setStatus(`Checking ${state.book.name}'s odds against the market…`);
+  try {
+    const p = new URLSearchParams({ book: state.book.key, sports: sports.join(','),
+      props: $('#props').checked ? 1 : 0, min_books: 1 });
+    const res = await getJSON('/api/scan?' + p);
+    const at = Date.now();
+    STATS.known = {};            // fresh odds: ask for fresh stats too
+    clearTimeout(STATS.timer); STATS.timer = null;
+    sports.forEach(k => state.results[k] = { rows: [], at });
+    res.rows.forEach(r => (state.results[r.sport_key] ||= { rows: [], at }).rows.push(r));
+    try { localStorage.setItem(storeKey(), JSON.stringify(state.results)); } catch (e) { /* storage full: keep in memory */ }
+    showCredits(res.quota);
+    renderAll(true);
+    if (res.errors.length) setStatus(`Some leagues couldn't be loaded: ${res.errors.join('; ')}`, true);
+  } catch (e) {
+    setStatus(e.message, true);
+  } finally {
+    renderScanButton();
+  }
+}
+
+function setStatus(msg, err) { $('#status').textContent = msg; $('#status').className = 'status' + (err ? ' err' : ''); }
+function showCredits(q) {
+  document.querySelectorAll('.credit-line').forEach(el => {
+    if (state.cfg && state.cfg.demo) {
+      el.textContent = 'Demo mode uses no credits';
+    } else if (q && q.remaining != null) {
+      const left = Math.floor(+q.remaining);
+      el.innerHTML = `<b>${left.toLocaleString()}</b> API credits left`;
+      el.classList.toggle('low', left < 50);
+    } else if (!el.innerHTML) {
+      el.textContent = 'Credits left will show after a scan';
+    }
+  });
+}
+
+/* ---------------- results ---------------- */
+function filtered() {
+  const m = $('#fMarket').value, minP = +$('#fProb').value / 100, minEv = +$('#fEv').value / 100;
+  const minBooks = +$('#minBooks').value || 1, key = $('#sort').value;
+  return rowsInTab()
+    .filter(r => (!m || r.market_label === m) && chance(r) >= minP && r.ev >= minEv && r.books_used.length >= minBooks
+      && (!$('#fAgree').checked || agrees(r))
+      && (!$('#fConf').value || CONF_RANK[confidence(r).level] >= CONF_RANK[$('#fConf').value]))
+    .sort((a, b) => key === 'start' ? a.start.localeCompare(b.start)
+      : key === 'chance' ? chance(b) - chance(a) : b[key] - a[key]);
+}
+
+function renderResults(fresh) {
+  const all = rowsInTab();
+  const markets = [...new Set(all.map(r => r.market_label))].sort();
+  const cur = $('#fMarket').value;
+  $('#fMarket').innerHTML = '<option value="">All bet types</option>' + markets.map(m => `<option>${esc(m)}</option>`).join('');
+  $('#fMarket').value = markets.includes(cur) ? cur : '';
+
+  const scannedHere = Object.keys(state.results).filter(k => shown(k));
+  const list = filtered();
+  $('#filters').hidden = !all.length;
+
+  if (!scanTargets().length) {
+    $('#empty').innerHTML = `<h3>No leagues selected</h3><p>Tap a league above to show its bets.</p>`;
+  } else if (!scannedHere.length) {
+    const tabName = state.tab === 'all' ? 'any sport' : (TAB_NAMES[state.tab] || state.tab);
+    $('#empty').innerHTML = `<div class="big" aria-hidden="true">${state.tab === 'all' ? '🏟️' : ICONS[state.tab] || '🏟️'}</div>
+      <h3>No odds loaded for ${esc(tabName)} yet</h3><p>Pick the leagues above and press Scan to load ${esc(state.book.name)}'s lines.</p>`;
+  } else if (!list.length) {
+    $('#empty').innerHTML = all.length
+      ? `<h3>No bets match these filters</h3><p>Lower the minimum win chance or value to see more.</p>`
+      : `<h3>No upcoming games found</h3><p>${esc(state.book.name)} has no lines for these leagues right now, or not enough other books offer them to compare.</p>`;
+  } else {
+    $('#empty').innerHTML = '';
+  }
+  $('#empty').hidden = !$('#empty').innerHTML;
+
+  const latest = Math.max(0, ...scannedHere.map(k => state.results[k].at));
+  if (latest && !$('#status').classList.contains('err')) {
+    const pos = all.filter(r => r.ev > 0).length;
+    setStatus(`${all.length} bets checked, ${pos} with positive value. Updated ${ago(latest)}.`);
+  }
+  $('#shown').textContent = list.length ? `Showing ${Math.min(list.length, 300)} of ${list.length}` : '';
+
+  const top = list[0];
+  state.shown = list.slice(0, 300);
+  state.topPick = top;
+  $('#toppick').hidden = !top || top.ev <= 0 || $('#sort').value !== 'ev';
+  if (top && !$('#toppick').hidden) {
+    $('#toppick').innerHTML = `
+      <div>
+        <div class="label">Best value right now</div>
+        <div class="who">${avatarFor(top)}<h3>${esc(betLabel(top))}</h3></div>
+        <div class="event">${esc(top.event)}, ${esc(top.sport)}, ${when(top.start)}</div>
+        ${agrees(top) ? '<em class="agree">Market + stats agree</em>' : ''}${formLine(top)}
+        <div class="facts">
+          <div><b>${top.american}</b>${esc(state.book.name)} odds</div>
+          <div><b>${pct(chance(top))}</b>chance of success</div>
+          <div><b>${confidence(top).label}</b>confidence</div>
+          <div><b>${pct(top.fair_prob)}</b>market win chance</div>
+          <div><b>${statOf(top) && statOf(top).prob != null ? pct(statOf(top).prob) : '–'}</b>stats win chance</div>
+          <div><b>${pct(top.book_prob)}</b>chance the price implies</div>
+          <div><b>${esc(top.market_label)}</b>bet type</div>
+        </div>
+      </div>
+      <div class="plate"><b>${signed(top.ev)}</b><small>value</small></div>`;
+    $('#toppick').classList.toggle('fresh', !!fresh);
+  }
+
+  $('#list').innerHTML = list.slice(0, 300).map((r, i) => betRow(r, i, 'main')).join('');
+  loadImages();
+  loadStats();
+}
+
+// One bet in a list. `which` says which list it belongs to, so a click opens the right bet.
+function betRow(r, i, which) {
+  return `
+    <div class="bet" data-list="${which}" data-i="${i}" role="button" tabindex="0" aria-label="Show details for ${esc(betLabel(r))}">
+      <div class="rank">${i + 1}</div>
+      <div class="what">${avatarFor(r)}<div><b>${esc(betLabel(r))}</b><span>${esc(r.event)}</span>${formLine(r)}${r.others && r.others.length ? `<span class="more-lines">+${r.others.length} other line${r.others.length > 1 ? 's' : ''} for this bet</span>` : ''}${agrees(r) ? '<em class="agree">Market + stats agree</em>' : ''}</div></div>
+      <div class="type">${esc(r.market_label)}<span class="when">${esc(r.sport)}, ${when(r.start)}</span></div>
+      <div class="odds">${r.american}<small>${r.decimal.toFixed(2)}</small></div>
+      <div class="probs" title="Compared with ${esc(r.books_used.join(', '))}">
+        <div class="chance"><b>${pct(chance(r), 0)}</b> chance of success</div>
+        ${confBadge(r)}<br>
+        Market <b>${pct(r.fair_prob)}</b>
+        <div class="meter"><i style="width:${(r.fair_prob * 100).toFixed(1)}%"></i><em style="left:${(r.book_prob * 100).toFixed(1)}%"></em></div>
+        ${statLine(r)}<br>
+        Price implies ${pct(r.book_prob)}${r.sharp ? ' <span class="tag-sharp">incl. sharp books</span>' : ''}
+      </div>
+      <div class="ev ${r.ev > 0 ? 'pos' : 'neg'}">${signed(r.ev)}<small>value</small></div>
+    </div>`;
+}
+
+const betLabel = Calc.betLabel;
+
+/* ---------------- stats second opinion ---------------- */
+const STATS = { known: {}, timer: null, busy: false };
+const statKey = r => `${r.event_id}|${r.market}|${r.selection}`;
+const statOf = r => STATS.known[statKey(r)];
+const nick = n => (n || '').split(' ').slice(-1)[0];
+// Calculations live in calc.js; these pass in each bet's stats opinion.
+const agrees = r => Calc.agrees(r, statOf(r));
+const chance = r => Calc.chance(r, statOf(r));
+const confidence = r => Calc.confidence(r, statOf(r));
+const CONF_RANK = Calc.CONF_RANK;
+
+function confBadge(r) {
+  const c = confidence(r);
+  return `<span class="conf ${c.level}" title="${esc(c.label)} confidence: ${esc(c.why)}">${c.label} confidence</span>`;
+}
+
+function statLine(r) {
+  const s = statOf(r);
+  if (!s) return '<span class="muted">Stats loading…</span>';
+  if (s.prob == null) return `<span class="muted" title="${esc(s.reason || '')}">Stats not available</span>`;
+  return `Stats <b class="${s.prob > r.book_prob ? 'up' : 'down'}">${pct(s.prob)}</b>`;
+}
+
+function formLine(r) {
+  const s = statOf(r);
+  if (!s || !s.form_home || !s.form_away) return '';
+  return `<span class="form">Last 10: ${esc(nick(r.away_team))} ${esc(s.form_away)}, ${esc(nick(r.home_team))} ${esc(s.form_home)}</span>`;
+}
+
+// Ask the server for the stats opinion on every bet we have. Leagues whose past
+// results are still downloading come back as "pending", so ask again shortly.
+async function loadStats(fromTimer) {
+  if (STATS.busy || (STATS.timer && !fromTimer)) return;
+  STATS.timer = null;
+  const rows = Object.values(state.results).flatMap(v => v.rows).concat(more.rows)
+    .filter(r => !(statKey(r) in STATS.known));
+  if (!rows.length) return;
+  STATS.busy = true;
+  let changed = false;
+  try {
+    const items = rows.map(r => ({ key: statKey(r), sport_key: r.sport_key, market: r.market, outcome: r.outcome,
+      point: r.point, home: r.home_team, away: r.away_team, team: r.team_total_for, fair_prob: r.fair_prob }));
+    const res = await (await fetch('/api/stats', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }) })).json();
+    changed = Object.keys(res.stats || {}).length > 0;
+    Object.assign(STATS.known, res.stats || {});
+    if (res.pending) STATS.timer = setTimeout(() => loadStats(true), 5000);
+  } catch (e) { /* stats are optional; the market numbers still show */ }
+  STATS.busy = false;
+  if (changed) { renderTabs(); renderResults(); if (!$('#moreView').hidden) renderMore(); }
+}
+
+async function loadAccuracy() {
+  const box = $('#accBody');
+  box.innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    const leagues = await getJSON('/api/accuracy');
+    box.innerHTML = (state.cfg.demo ? '<p class="muted">Demo mode: the stats shown on bets are made up, but this report comes from real past games.</p>' : '') +
+      '<div class="acc-grid">' + leagues.map(lg => {
+        const r = lg.report;
+        if (!r) {
+          const msg = lg.status === 'error' ? `Couldn't load past results: ${esc(lg.error || '')}` : 'Downloading past results…';
+          return `<div class="acc"><h4>${esc(lg.league)}</h4><p class="muted">${msg}</p></div>`;
+        }
+        const used = Object.entries(r.usable || {}).filter(([, ok]) => ok).map(([k]) => k);
+        const names = { moneyline: 'moneylines', spread: 'spreads', total: 'totals' };
+        const rows = (r.buckets || []).map(b =>
+          `<tr><td>${esc(b.range)}</td><td class="n">${b.games}</td><td class="n">${pct(b.actual)}</td></tr>`).join('');
+        return `<div class="acc"><h4>${esc(lg.league)}</h4>
+          <p>Tested on <b>${r.games}</b> games from this season, each predicted before it was played. Picked the winner <b>${pct(r.picked_winner || 0, 0)}</b> of the time.</p>
+          ${rows ? `<table><tr><th>When stats said</th><th class="n">Games</th><th class="n">Teams won</th></tr>${rows}</table>` : ''}
+          ${r.spread_coverage != null ? `<p>The real margin landed inside the stats' likely range ${pct(r.spread_coverage, 0)} of the time, and the real total ${pct(r.total_coverage, 0)} of the time (aim: 80%).</p>` : ''}
+          <p class="${used.length ? 'ok' : 'warn'}">${used.length ? 'Used for ' + used.map(u => names[u]).join(', ') : 'Not used yet: not enough reliable results this season'}</p>
+        </div>`;
+      }).join('') + '</div>';
+    if (leagues.some(lg => !lg.report && lg.status !== 'error')) setTimeout(() => { if ($('#accBox').open) loadAccuracy(); }, 5000);
+  } catch (e) {
+    box.innerHTML = `<p class="muted">${esc(e.message)}</p>`;
+  }
+}
+
+/* ---------------- logos and player photos ---------------- */
+const IMG = { known: {}, timer: null };
+
+function initials(name) {
+  const words = name.replace(/[^A-Za-z0-9 .'-]/g, '').split(/\s+/).filter(Boolean);
+  if (!words.length) return '?';
+  return (words.length === 1 ? words[0].slice(0, 2) : words[0][0] + words[words.length - 1][0]).toUpperCase();
+}
+
+function avatar(kind, name, group) {
+  const key = `${kind}|${name}`, url = IMG.known[key];
+  return `<span class="av ${kind}" data-key="${esc(key)}" data-group="${esc(group || '')}" title="${esc(name)}">` +
+    (url ? `<img src="${esc(url)}" alt="" loading="lazy" onerror="this.remove()">` : '') +
+    `<b aria-hidden="true">${esc(initials(name))}</b></span>`;
+}
+
+function avatarFor(r) {
+  const group = state.groupOf[r.sport_key] || '';
+  const fighters = group === 'Mixed Martial Arts' || group === 'Boxing';
+  if (r.player) return avatar('player', r.player, group);
+  if (r.pick_team) return avatar(fighters ? 'player' : 'team', r.pick_team, group);
+  if (r.home_team && r.away_team) {
+    const k = fighters ? 'player' : 'team';
+    return `<span class="pair">${avatar(k, r.away_team, group)}${avatar(k, r.home_team, group)}</span>`;
+  }
+  return '';
+}
+
+function applyImages() {
+  document.querySelectorAll('.av[data-key]').forEach(s => {
+    const url = IMG.known[s.dataset.key];
+    if (url && !s.querySelector('img')) {
+      s.insertAdjacentHTML('afterbegin', `<img src="${esc(url)}" alt="" loading="lazy" onerror="this.remove()">`);
+    }
+  });
+}
+
+// Ask the server for logos/photos of everything on screen. New names are looked up
+// in the background (about one every 2 seconds), so keep asking until they're done.
+async function loadImages() {
+  clearTimeout(IMG.timer);
+  const items = new Map();
+  document.querySelectorAll('.av[data-key]').forEach(s => {
+    const key = s.dataset.key;
+    if (key in IMG.known || items.has(key)) return;
+    const [kind, ...rest] = key.split('|');
+    items.set(key, { kind, name: rest.join('|'), group: s.dataset.group });
+  });
+  if (!items.size) return;
+  try {
+    const r = await fetch('/api/images', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [...items.values()] }) });
+    const res = await r.json();
+    Object.assign(IMG.known, res.images || {});
+    applyImages();
+    if (res.pending) IMG.timer = setTimeout(loadImages, 5000);
+  } catch (e) { /* pictures are optional; initials stay */ }
+}
+
+function renderAll(fresh) {
+  if (!$('#status').classList.contains('err')) setStatus('');
+  renderTabs();
+  renderLeagues();
+  renderResults(fresh);
+}
+
+/* ---------------- boot ---------------- */
+async function init() {
+  state.cfg = await getJSON('/api/config');
+  showCredits(state.cfg.quota);
+  try {
+    state.sports = await getJSON('/api/sports');
+    getJSON('/api/config').then(c => showCredits(c.quota)).catch(() => {});  // sports call reports credits
+  } catch (e) {
+    state.sports = [];
+    setStatus(e.message, true);
+  }
+  state.sports.forEach(s => state.groupOf[s.key] = s.group);
+  state.sports.forEach(s => { if (state.cfg.demo || POPULAR.includes(s.key)) state.picked.add(s.key); });
+  const saved = localStorage.getItem('oddfinder.book');
+  if (saved && state.cfg.books.some(b => b.key === saved)) pickBook(saved); else showStart();
+}
+
+$('#scan').onclick = () => { setStatus(''); scan(); };
+$('#props').onchange = renderScanButton;
+$('#changeBook').onclick = showStart;
+$('#home').onclick = e => { e.preventDefault(); state.tab = 'all'; renderAll(); };
+['#fMarket', '#fProb', '#fEv', '#sort', '#minBooks'].forEach(s => $(s).addEventListener('input', () => renderResults()));
+$('#fAgree').addEventListener('change', () => renderResults());
+$('#fConf').addEventListener('change', () => renderResults());
+$('#accBox').addEventListener('toggle', () => { if ($('#accBox').open) loadAccuracy(); });
+
+/* ---------------- bet details pop-up ---------------- */
+const americanOdds = Calc.americanOdds;
+const money = x => '$' + x.toFixed(2).replace(/\.00$/, '');
+const unitFor = k => /hockey|soccer/.test(k) ? 'goals' : /baseball/.test(k) ? 'runs' : 'points';
+const daysAway = iso => (new Date(iso) - Date.now()) / 86400000;
+
+// Turn a bet's numbers into a plain-English verdict, reasons and risks.
+function explain(r) {
+  const book = state.book.name, s = statOf(r), hasStats = !!(s && s.prob != null);
+  const c = confidence(r), ch = chance(r);
+  const good = [], risk = [];
+
+  // 1. Price vs. chance: where the value comes from
+  const gap = (r.fair_prob - r.book_prob) * 100;
+  if (r.ev > 0) {
+    good.push(`${book}'s odds of ${r.american} are priced as if this has a ${pct(r.book_prob)} chance. The rest of the market puts it at ${pct(r.fair_prob)}, ${gap.toFixed(1)} points higher. That gap is the value: about ${money(r.ev * 100)} profit per $100 bet, on average over many bets like this.`);
+  } else {
+    risk.push(`${book}'s odds of ${r.american} are priced as if this has a ${pct(r.book_prob)} chance, but the market only gives it ${pct(r.fair_prob)}. Over many bets like this you'd expect to lose about ${money(-r.ev * 100)} per $100.`);
+  }
+
+  // 2. How the price compares with other sportsbooks
+  const cmp = r.compare || [];
+  if (cmp.length) {
+    const beaten = cmp.filter(o => o.price < r.decimal).length;
+    const better = cmp.filter(o => o.price > r.decimal);
+    if (!better.length) good.push(`${book} has the best price of all ${cmp.length + 1} sportsbooks compared.`);
+    else if (beaten >= cmp.length / 2) good.push(`${book} pays more than ${beaten} of the ${cmp.length} other sportsbooks on this bet.`);
+    else risk.push(`${better.length} of ${cmp.length} other sportsbooks pay more for this same bet (best: ${better[0].book} at ${better[0].american}).`);
+    const pin = cmp.find(o => o.book === 'Pinnacle');
+    if (pin && pin.price < r.decimal) good.push(`Pinnacle, the sportsbook known for the sharpest prices, only offers ${pin.american}, less than ${book}'s ${r.american}.`);
+  }
+
+  // 3. The stats second opinion
+  if (hasStats) {
+    if (s.prob > r.book_prob) good.push(`Past results agree: the stats give it a ${pct(s.prob)} chance, also above the ${pct(r.book_prob)} the price implies.`);
+    else risk.push(`Past results disagree: the stats give it only ${pct(s.prob)}, below the ${pct(r.book_prob)} the price implies.`);
+    if (s.expected_total != null && r.point != null) {
+      const unit = unitFor(r.sport_key);
+      const leans = (r.outcome === 'Over') === (s.expected_total > r.point);
+      (leans ? good : risk).push(`The stats expect about ${s.expected_total} total ${unit}, against a line of ${r.point}.`);
+    }
+    if (s.form_home && s.form_away && r.pick_team) {
+      const mine = r.pick_team === r.home_team ? s.form_home : s.form_away;
+      const theirs = r.pick_team === r.home_team ? s.form_away : s.form_home;
+      const opp = r.pick_team === r.home_team ? r.away_team : r.home_team;
+      const wins = x => +x.split('-')[0];
+      const line = `${r.pick_team} are ${mine} in their last 10 games; ${opp} are ${theirs}.`;
+      if (wins(mine) >= 6 && wins(mine) > wins(theirs)) good.push(line);
+      else if (wins(mine) <= 4 && wins(mine) < wins(theirs)) risk.push(line);
+    }
+  } else {
+    risk.push(`There's no stats second opinion for this bet${s && s.reason ? ` (${s.reason.toLowerCase()})` : ''}, so it rests on the market alone.`);
+  }
+
+  // 4. Confidence
+  if (c.level === 'high') good.push(`High confidence: ${c.why}.`);
+  if (c.level === 'low') risk.push(`Low confidence: ${c.why}.`);
+
+  // 5. Things that are always true
+  risk.push(`Even at a ${pct(ch, 0)} chance of success, this bet loses about ${100 - Math.round(ch * 100)} times in 100. Value only pays off over many bets.`);
+  if (r.player) risk.push('Player props are offered by fewer sportsbooks and can swing on late lineup or injury news.');
+  if (r.estimated) risk.push('Some sportsbooks only offer the "Yes" side of this bet and no other players to measure their margin from, so the bot guessed it (about 10%). Treat the chance as rough.');
+  else if (r.margin_measured) good.push('Sportsbooks only offer "Yes" here, but their margin was measured from the Yes/No lines they offer other players in this game, so the chance is more reliable than a guess.');
+  const d = daysAway(r.start);
+  if (d > 3) risk.push(`The game is ${Math.round(d)} days away, so injuries and lineup news could still move the line.`);
+  const at = r.scanned_at || (state.results[r.sport_key] && state.results[r.sport_key].at);
+  risk.push(`Odds move. These were checked ${at ? ago(at) : 'earlier'}, so confirm the price in ${book} before you bet.`);
+
+  let verdict;
+  if (r.ev > 0.03 && c.level !== 'low' && (!hasStats || s.prob > r.book_prob)) verdict = ['good', 'Strong value', `${book} is paying noticeably more than this bet's chances are worth.`];
+  else if (r.ev > 0 && c.level === 'low') verdict = ['ok', 'Possible value, rough estimate', `${book} looks like it's paying more than this bet's chances are worth, but the estimate is rough.`];
+  else if (r.ev > 0) verdict = ['good', 'Value pick', `${book} is paying a little more than this bet's chances are worth.`];
+  else if (r.ev > -0.02) verdict = ['ok', 'About a fair price', `${book}'s odds are close to what the bet's chances are worth, so there's no real edge.`];
+  else verdict = ['bad', 'Not a value bet', `${book} is paying less than this bet's chances are worth.`];
+  return { verdict, good, risk };
+}
+
+function betDetails(r) {
+  const book = state.book.name, s = statOf(r), hasStats = !!(s && s.prob != null);
+  const c = confidence(r), ex = explain(r);
+  const [tone, title, line] = ex.verdict;
+
+  // price comparison: this book, every other book, and the fair (no-margin) price
+  const cmp = r.compare || [];
+  const fairDec = 1 / r.fair_prob;
+  const rowsCmp = [{ book, price: r.decimal, american: r.american, cls: 'fd', note: ' (this bet)' },
+    ...cmp.map(o => ({ ...o, cls: '', note: o.sharp ? ' <small>sharp</small>' : '' })),
+    { book: 'Fair price', price: fairDec, american: americanOdds(fairDec), cls: 'fair', note: ' <small>no margin</small>' }]
+    .sort((a, b) => b.price - a.price);
+  const maxP = Math.max(...rowsCmp.map(o => o.price)), minP = Math.min(...rowsCmp.map(o => o.price));
+  const width = p => maxP === minP ? 100 : 15 + 85 * (p - minP) / (maxP - minP);
+
+  const form = s && s.form_home ? `<p>Last 10 games: ${esc(r.away_team)} ${esc(s.form_away)}, ${esc(r.home_team)} ${esc(s.form_home)}.</p>` : '';
+  return `
+    <button class="close" aria-label="Close">×</button>
+    <div class="bm-head">${avatarFor(r)}<div>
+      <h2 id="bmTitle">${esc(betLabel(r))}</h2>
+      <div class="sub">${esc(r.event)}, ${esc(r.sport)}, ${when(r.start)}. ${esc(r.market_label)}.</div>
+    </div></div>
+    <div class="bm-verdict ${tone}"><b>${title}.</b>${esc(line)}</div>
+    <div class="bm-nums">
+      <div class="hl"><b>${pct(chance(r), 0)}</b>chance of success</div>
+      <div><b>${c.label}</b>confidence</div>
+      <div><b>${signed(r.ev)}</b>value</div>
+      <div><b>${r.american}</b>${esc(book)} odds</div>
+      <div><b>${money((r.decimal - 1) * 100)}</b>profit on a $100 bet</div>
+    </div>
+
+    <h3>${ex.verdict[0] === 'good' ? 'Why it could be a good pick' : 'What it has going for it'}</h3>
+    ${ex.good.length ? `<ul class="good">${ex.good.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : '<p>Nothing stands out in its favor.</p>'}
+
+    <h3>Things to watch out for</h3>
+    <ul class="risk">${ex.risk.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+
+    <h3>How ${esc(book)}'s price compares</h3>
+    ${cmp.length ? `<p>Higher odds pay more. The fair price is what the odds would be with every book's margin removed.</p>
+      <div class="cmp">${rowsCmp.map(o => `
+        <span class="${o.cls}">${esc(o.book)}${o.note}</span><span class="o ${o.cls}">${o.american}</span>
+        <span class="bar ${o.cls}"><i style="width:${width(o.price).toFixed(0)}%"></i></span>`).join('')}</div>`
+      : '<p>Scan again to see each sportsbook\'s price for this bet.</p>'}
+
+    ${r.others && r.others.length ? `
+      <h3>Other lines for this bet</h3>
+      <p>The same bet at other numbers. ${r.others.every(o => o.ev <= r.ev)
+        ? 'This one is listed because it has the best value.'
+        : 'You\'re viewing one of the other lines; the list shows the one with the best value.'} Click a line to see its details.</p>
+      <div class="lines">${[r, ...r.others].map((o, i) => `
+        <button class="line${i === 0 ? ' this' : ''}" data-line="${i}">
+          <span>${esc(betLabel(o))}${i === 0 ? ' <small>(this one)</small>' : ''}</span>
+          <span class="o">${o.american}</span>
+          <span>${pct(chance(o), 0)}<small> chance</small></span>
+          <span class="${o.ev > 0 ? 'up' : 'down'}">${signed(o.ev)}<small> value</small></span>
+        </button>`).join('')}</div>` : ''}
+
+    <h3>The numbers behind it</h3>
+    <ul>
+      <li>Market win chance: <b>${pct(r.fair_prob)}</b>, from ${r.books_used.length} other sportsbooks with their margins removed.</li>
+      <li>Stats win chance: <b>${hasStats ? pct(s.prob) : 'not available'}</b>${hasStats ? ', from this season\'s and last season\'s results' : ''}.</li>
+      <li>Chance of success: <b>${pct(chance(r))}</b>${hasStats ? ' (75% market, 25% stats)' : ' (market only)'}.</li>
+      <li>Chance ${esc(book)}'s price implies: <b>${pct(r.book_prob)}</b>, margin included.</li>
+      <li>Confidence: <b>${c.label}</b>, because of: ${esc(c.why)}.</li>
+    </ul>
+    ${form}`;
+}
+
+function openBet(r) {
+  if (!r) return;
+  $('#bmBody').innerHTML = betDetails(r);
+  $('#betModal').showModal();
+  $('#bmBody .close').onclick = () => $('#betModal').close();
+  const lines = r.others ? [r, ...r.others] : [];
+  document.querySelectorAll('#bmBody .line').forEach(b => b.onclick = () => {
+    const pick = lines[+b.dataset.line];
+    if (pick !== r) openBet(Object.assign({}, pick, { others: lines.filter(x => x !== pick) }));
+  });
+  $('#betModal').scrollTop = 0;
+  loadImages();
+}
+
+const betFromRow = el => (el.dataset.list === 'more' ? more.shown : state.shown)[+el.dataset.i];
+['#list', '#mList'].forEach(id => {
+  $(id).addEventListener('click', e => { const b = e.target.closest('.bet'); if (b) openBet(betFromRow(b)); });
+  $(id).addEventListener('keydown', e => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('bet')) { e.preventDefault(); openBet(betFromRow(e.target)); }
+  });
+});
+
+/* ---------------- More bets ---------------- */
+const more = { rows: [], shown: [], games: [], groups: [], loadedLeague: null };
+const moreKey = () => `oddfinder.more.${state.cfg.demo ? 'demo.' : ''}${state.book.key}`;
+const MORE_MAX_GAMES = 10;
+
+function showView(view) {
+  document.querySelectorAll('.viewswitch button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === view)));
+  $('#mainView').hidden = view !== 'main';
+  $('#moreView').hidden = view !== 'more';
+  if (view === 'more') enterMore();
+}
+
+function enterMore() {
+  if (!$('#mLeague').options.length) {
+    const byGroup = {};
+    state.sports.forEach(s => (byGroup[s.group] = byGroup[s.group] || []).push(s));
+    $('#mLeague').innerHTML = groups().map(g => `<optgroup label="${esc(TAB_NAMES[g] || g)}">` +
+      byGroup[g].map(s => `<option value="${s.key}">${esc(s.title)}</option>`).join('') + '</optgroup>').join('');
+    const first = POPULAR.find(k => state.sports.some(s => s.key === k));
+    if (first) $('#mLeague').value = first;
+  }
+  if (more.loadedLeague !== $('#mLeague').value) loadMoreLeague();
+  renderMore();
+}
+
+// Upcoming games and available bet types for a league. Free: no credits used.
+async function loadMoreLeague() {
+  const sport = $('#mLeague').value;
+  if (!sport) return;
+  more.loadedLeague = sport;
+  $('#mGames').innerHTML = '<span class="muted">Loading games…</span>';
+  $('#mTypes').innerHTML = '';
+  try {
+    const res = await getJSON('/api/games?sport=' + encodeURIComponent(sport));
+    if (more.loadedLeague !== sport) return;          // user switched league meanwhile
+    more.games = res.games;
+    more.groups = res.groups;
+    showCredits(res.quota);
+    $('#mGames').innerHTML = res.games.length ? res.games.map(g => `
+      <label><input type="checkbox" value="${esc(g.id)}"><span>${esc(g.away)} @ ${esc(g.home)}<small>${when(g.start)}</small></span></label>`).join('')
+      : '<span class="muted">No upcoming games in this league right now.</span>';
+    $('#mTypes').innerHTML = res.groups.length ? res.groups.map(g => `
+      <label><input type="checkbox" value="${esc(g.key)}" ${g.key === 'alt' || g.key === 'team' ? 'checked' : ''}>
+        <span>${esc(g.label)}<small>${esc(g.hint)}. <span class="cost">${g.markets.length} bet type${g.markets.length > 1 ? 's' : ''}</span></small></span></label>`).join('')
+      : '<span class="muted">No extra bet types for this league.</span>';
+    document.querySelectorAll('#mGames input, #mTypes input').forEach(i => i.onchange = renderMoreScan);
+  } catch (e) {
+    $('#mGames').innerHTML = `<span class="status err">${esc(e.message)}</span>`;
+  }
+  renderMoreScan();
+}
+
+function moreSelection() {
+  const games = [...document.querySelectorAll('#mGames input:checked')].map(i => i.value);
+  const picked = [...document.querySelectorAll('#mTypes input:checked')].map(i => i.value);
+  const markets = more.groups.filter(g => picked.includes(g.key)).flatMap(g => g.markets);
+  return { games, markets };
+}
+
+function renderMoreScan() {
+  const { games, markets } = moreSelection();
+  const btn = $('#mScan');
+  const tooMany = games.length > MORE_MAX_GAMES;
+  btn.disabled = !games.length || !markets.length || tooMany;
+  const cost = state.cfg.demo ? '' : `<small>up to ${games.length * markets.length} credits</small>`;
+  btn.innerHTML = !games.length ? 'Pick games' : !markets.length ? 'Pick bet types'
+    : tooMany ? `Pick ${MORE_MAX_GAMES} games or fewer`
+    : `Scan ${games.length} game${games.length > 1 ? 's' : ''}${cost}`;
+}
+
+async function moreScan() {
+  const { games, markets } = moreSelection();
+  if (!games.length || !markets.length) return;
+  $('#mScan').disabled = true;
+  setMoreStatus(`Loading ${state.book.name}'s odds for ${games.length} game${games.length > 1 ? 's' : ''}…`);
+  try {
+    const p = new URLSearchParams({ book: state.book.key, sport: $('#mLeague').value,
+      events: games.join(','), markets: markets.join(',') });
+    const res = await getJSON('/api/more-scan?' + p);
+    const at = Date.now();
+    // Replace earlier results for these games; keep the rest.
+    more.rows = more.rows.filter(r => !games.includes(r.event_id))
+      .concat(res.rows.map(r => ({ ...r, scanned_at: at })));
+    res.rows.forEach(r => delete STATS.known[statKey(r)]);   // fresh odds: fresh stats
+    saveMore();
+    showCredits(res.quota);
+    setMoreStatus(`${res.count} bets loaded for ${games.length} game${games.length > 1 ? 's' : ''}.` +
+      (res.errors.length ? ` Some games couldn't be loaded: ${res.errors.join('; ')}` : ''), !!res.errors.length && !res.count);
+    renderMore();
+  } catch (e) {
+    setMoreStatus(e.message, true);
+  } finally {
+    renderMoreScan();
+  }
+}
+
+function saveMore() {
+  // Drop games that have started, then save so reopening the site costs nothing.
+  more.rows = more.rows.filter(r => new Date(r.start) > Date.now());
+  try { localStorage.setItem(moreKey(), JSON.stringify(more.rows)); } catch (e) { /* storage full */ }
+}
+
+function setMoreStatus(msg, err) { $('#mStatus').textContent = msg; $('#mStatus').className = 'status' + (err ? ' err' : ''); }
+
+function fillSelect(sel, items, allLabel) {   // items: [[value, label]]
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">${allLabel}</option>` + items.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+  sel.value = items.some(([v]) => v === cur) ? cur : '';
+}
+
+function renderMore() {
+  const rows = more.rows;
+  $('#mFilters').hidden = !rows.length;
+  const uniq = (arr) => [...new Map(arr.map(x => [x[0], x])).values()];
+  fillSelect($('#mfLeague'), uniq(rows.map(r => [r.sport_key, r.sport])).sort((a, b) => a[1].localeCompare(b[1])), 'All leagues');
+  const lg = $('#mfLeague').value;
+  const inLeague = rows.filter(r => !lg || r.sport_key === lg);
+  fillSelect($('#mfGame'), uniq(inLeague.map(r => [r.event_id, `${r.event}, ${when(r.start)}`])), 'All games');
+  const game = $('#mfGame').value;
+  const inGame = inLeague.filter(r => !game || r.event_id === game);
+  fillSelect($('#mfType'), uniq(inGame.map(r => [r.market_label, r.market_label])).sort((a, b) => a[1].localeCompare(b[1])), 'All bet types');
+  const names = [...new Set(inGame.flatMap(r => [r.player, r.team_total_for, r.home_team, r.away_team]).filter(Boolean))].sort();
+  $('#mWhoList').innerHTML = names.map(n => `<option value="${esc(n)}">`).join('');
+
+  const type = $('#mfType').value, who = $('#mfWho').value.trim().toLowerCase();
+  const conf = $('#mfConf').value, key = $('#mfSort').value;
+  let list = inGame
+    .filter(r => (!type || r.market_label === type)
+      && (!who || [r.selection, r.player, r.team_total_for, r.pick_team].some(x => x && x.toLowerCase().includes(who)))
+      && (!conf || CONF_RANK[confidence(r).level] >= CONF_RANK[conf]));
+  // Alternate lines: show each bet's best-value line, with the others listed in its pop-up.
+  if ($('#mfBest').checked) list = Calc.bestLines(list);
+  list.sort((a, b) => key === 'start' ? a.start.localeCompare(b.start)
+      : key === 'chance' ? chance(b) - chance(a) : b.ev - a.ev);
+
+  more.shown = list.slice(0, 300);
+  $('#mShown').textContent = list.length ? `Showing ${more.shown.length} of ${list.length}` : '';
+  $('#mList').innerHTML = more.shown.map((r, i) => betRow(r, i, 'more')).join('');
+  $('#mEmpty').innerHTML = !rows.length
+    ? '<h3>No extra bets loaded yet</h3><p>Pick a league, the games and the bet types above, then press Scan.</p>'
+    : !list.length ? '<h3>No bets match these filters</h3><p>Try another player, game or bet type.</p>' : '';
+  $('#mEmpty').hidden = !$('#mEmpty').innerHTML;
+  loadImages();
+  loadStats();
+}
+
+document.querySelectorAll('.viewswitch button').forEach(b => b.onclick = () => showView(b.dataset.view));
+$('#mLeague').addEventListener('change', loadMoreLeague);
+$('#mAllGames').onclick = () => {
+  const boxes = [...document.querySelectorAll('#mGames input')];
+  const allOn = boxes.length && boxes.slice(0, MORE_MAX_GAMES).every(i => i.checked);
+  boxes.forEach((i, n) => i.checked = !allOn && n < MORE_MAX_GAMES);
+  renderMoreScan();
+};
+$('#mScan').onclick = moreScan;
+$('#mClear').onclick = () => { more.rows = []; saveMore(); setMoreStatus(''); renderMore(); };
+['#mfLeague', '#mfGame', '#mfType', '#mfConf', '#mfSort', '#mfBest'].forEach(s => $(s).addEventListener('change', renderMore));
+$('#mfWho').addEventListener('input', renderMore);
+$('#toppick').addEventListener('click', () => openBet(state.topPick));
+$('#toppick').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBet(state.topPick); } });
+// click outside the pop-up closes it (Esc closes it too, built in)
+$('#betModal').addEventListener('click', e => { if (e.target === $('#betModal')) $('#betModal').close(); });
+init().catch(e => { document.body.innerHTML = `<p style="padding:40px">Odd Finder couldn't start: ${esc(e.message)}</p>`; });
