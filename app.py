@@ -324,6 +324,7 @@ def analyze_event(event, target, min_books):
         names = set(outs)
         weighted = {n: 0.0 for n in names}
         total_w, used = 0.0, []
+        compare = {n: [] for n in names}    # each other book's price for each side
         for bkey, btitle, blines in others:
             line = blines.get(key)
             if not line or set(line) != names:
@@ -331,6 +332,8 @@ def analyze_event(event, target, min_books):
             w = SHARP_WEIGHTS.get(bkey, 1.0)
             for n, p in devig(line).items():
                 weighted[n] += w * p
+                compare[n].append({"book": btitle, "price": line[n]["price"],
+                                   "american": american(line[n]["price"]), "sharp": bkey in SHARP_WEIGHTS})
             total_w += w
             used.append(btitle)
         if len(used) < min_books:
@@ -363,6 +366,7 @@ def analyze_event(event, target, min_books):
                 "ev": round(fair * price - 1, 4),
                 "hold": round(hold, 4),
                 "books_used": used,
+                "compare": sorted(compare[n], key=lambda c: -c["price"]),
                 "sharp": any(b in ("Pinnacle", "Betfair") for b in used),
             })
     return rows

@@ -248,6 +248,50 @@
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
   @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   .toppick.fresh { animation: rise .35s ease-out; }
+
+  /* ---------- clickable bets + details pop-up ---------- */
+  .bet, .toppick { cursor: pointer; }
+  .bet:hover { background: rgba(255,255,255,.035); }
+  .toppick:hover { border-color: var(--amber); }
+  dialog#betModal {
+    padding: 0; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--chalk);
+    width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 40px); overflow-y: auto;
+  }
+  dialog#betModal::backdrop { background: rgba(4, 14, 24, .72); }
+  .bm { position: relative; padding: 26px 28px 28px; }
+  .bm .close { position: absolute; top: 12px; right: 14px; background: none; border: 0; color: var(--slate); font-size: 30px; line-height: 1; cursor: pointer; padding: 4px 8px; }
+  .bm .close:hover { color: var(--chalk); }
+  .bm-head { display: flex; gap: 16px; align-items: center; padding-right: 40px; }
+  .bm-head .av { width: 64px; height: 64px; font-size: 20px; }
+  .bm-head .pair .av { width: 50px; height: 50px; border-color: var(--panel); }
+  .bm h2 { font: 700 clamp(26px, 4vw, 36px)/1.05 var(--display); margin: 0 0 4px; }
+  .bm .sub { color: var(--slate); font-size: 15px; }
+  .bm-verdict { margin: 18px 0 0; padding: 12px 16px; border-radius: 8px; background: var(--panel-2); font-size: 16px; }
+  .bm-verdict b { font: 700 20px var(--display); margin-right: 6px; }
+  .bm-verdict.good { border-left: 5px solid var(--turf); }
+  .bm-verdict.ok { border-left: 5px solid var(--amber); }
+  .bm-verdict.bad { border-left: 5px solid var(--flag); }
+  .bm-nums { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; margin: 16px 0 6px; }
+  .bm-nums div { background: var(--panel-2); border-radius: 8px; padding: 10px 12px; font-size: 13px; color: var(--slate); }
+  .bm-nums b { display: block; font: 700 26px/1.1 var(--display); color: var(--chalk); }
+  .bm-nums .hl { background: var(--amber); color: #4d3a00; }
+  .bm-nums .hl b { color: var(--ink); }
+  .bm h3 { font: 600 22px var(--display); margin: 24px 0 8px; }
+  .bm ul { margin: 0; padding-left: 20px; }
+  .bm li { margin: 7px 0; line-height: 1.45; }
+  .bm li::marker { color: var(--slate); }
+  .bm ul.good li::marker { color: var(--turf); }
+  .bm ul.risk li::marker { color: var(--amber); }
+  .bm p { margin: 0 0 8px; color: var(--slate); }
+  .cmp { display: grid; grid-template-columns: minmax(110px, 160px) 64px 1fr; gap: 7px 12px; align-items: center; font-size: 14px; }
+  .cmp .o { text-align: right; font: 600 17px var(--display); font-variant-numeric: tabular-nums; }
+  .cmp .bar { height: 8px; background: var(--panel-2); border-radius: 4px; }
+  .cmp .bar i { display: block; height: 100%; background: var(--slate); border-radius: 4px; }
+  .cmp .fd { color: var(--amber); font-weight: 600; }
+  .cmp .bar.fd i { background: var(--amber); }
+  .cmp .fair { color: var(--turf); }
+  .cmp .bar.fair i { background: var(--turf); }
+  .cmp small { color: var(--slate); font-weight: 400; }
 </style>
 </head>
 <body>
@@ -293,7 +337,7 @@
     <div class="status" id="status" role="status"></div>
 
     <section id="results">
-      <div class="toppick" id="toppick" hidden></div>
+      <div class="toppick" id="toppick" role="button" tabindex="0" aria-label="Show details for the best value bet" hidden></div>
 
       <div class="filters" id="filters" hidden>
         <label>Bet type<select id="fMarket"></select></label>
@@ -341,6 +385,10 @@
     <footer>Estimates only. No bet is guaranteed, and odds change constantly, so check the line in your sportsbook before you bet. Only bet what you can afford to lose. If gambling stops being fun, call or text 1-800-GAMBLER.</footer>
   </main>
 </div>
+
+<dialog id="betModal" aria-labelledby="bmTitle">
+  <div class="bm" id="bmBody"></div>
+</dialog>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -528,6 +576,8 @@ function renderResults(fresh) {
   $('#shown').textContent = list.length ? `Showing ${Math.min(list.length, 300)} of ${list.length}` : '';
 
   const top = list[0];
+  state.shown = list.slice(0, 300);
+  state.topPick = top;
   $('#toppick').hidden = !top || top.ev <= 0 || $('#sort').value !== 'ev';
   if (top && !$('#toppick').hidden) {
     $('#toppick').innerHTML = `
@@ -551,7 +601,7 @@ function renderResults(fresh) {
   }
 
   $('#list').innerHTML = list.slice(0, 300).map((r, i) => `
-    <div class="bet">
+    <div class="bet" data-i="${i}" role="button" tabindex="0" aria-label="Show details for ${esc(betLabel(r))}">
       <div class="rank">${i + 1}</div>
       <div class="what">${avatarFor(r)}<div><b>${esc(betLabel(r))}</b><span>${esc(r.event)}</span>${formLine(r)}${agrees(r) ? '<em class="agree">Market + stats agree</em>' : ''}</div></div>
       <div class="type">${esc(r.market_label)}<span class="when">${esc(r.sport)}, ${when(r.start)}</span></div>
@@ -774,6 +824,153 @@ $('#home').onclick = e => { e.preventDefault(); state.tab = 'all'; renderAll(); 
 $('#fAgree').addEventListener('change', () => renderResults());
 $('#fConf').addEventListener('change', () => renderResults());
 $('#accBox').addEventListener('toggle', () => { if ($('#accBox').open) loadAccuracy(); });
+
+/* ---------------- bet details pop-up ---------------- */
+const americanOdds = d => d >= 2 ? '+' + Math.round((d - 1) * 100) : String(Math.round(-100 / (d - 1)));
+const money = x => '$' + x.toFixed(2).replace(/\.00$/, '');
+const unitFor = k => /hockey|soccer/.test(k) ? 'goals' : /baseball/.test(k) ? 'runs' : 'points';
+const daysAway = iso => (new Date(iso) - Date.now()) / 86400000;
+
+// Turn a bet's numbers into a plain-English verdict, reasons and risks.
+function explain(r) {
+  const book = state.book.name, s = statOf(r), hasStats = !!(s && s.prob != null);
+  const c = confidence(r), ch = chance(r);
+  const good = [], risk = [];
+
+  // 1. Price vs. chance: where the value comes from
+  const gap = (r.fair_prob - r.book_prob) * 100;
+  if (r.ev > 0) {
+    good.push(`${book}'s odds of ${r.american} are priced as if this has a ${pct(r.book_prob)} chance. The rest of the market puts it at ${pct(r.fair_prob)}, ${gap.toFixed(1)} points higher. That gap is the value: about ${money(r.ev * 100)} profit per $100 bet, on average over many bets like this.`);
+  } else {
+    risk.push(`${book}'s odds of ${r.american} are priced as if this has a ${pct(r.book_prob)} chance, but the market only gives it ${pct(r.fair_prob)}. Over many bets like this you'd expect to lose about ${money(-r.ev * 100)} per $100.`);
+  }
+
+  // 2. How the price compares with other sportsbooks
+  const cmp = r.compare || [];
+  if (cmp.length) {
+    const beaten = cmp.filter(o => o.price < r.decimal).length;
+    const better = cmp.filter(o => o.price > r.decimal);
+    if (!better.length) good.push(`${book} has the best price of all ${cmp.length + 1} sportsbooks compared.`);
+    else if (beaten >= cmp.length / 2) good.push(`${book} pays more than ${beaten} of the ${cmp.length} other sportsbooks on this bet.`);
+    else risk.push(`${better.length} of ${cmp.length} other sportsbooks pay more for this same bet (best: ${better[0].book} at ${better[0].american}).`);
+    const pin = cmp.find(o => o.book === 'Pinnacle');
+    if (pin && pin.price < r.decimal) good.push(`Pinnacle, the sportsbook known for the sharpest prices, only offers ${pin.american}, less than ${book}'s ${r.american}.`);
+  }
+
+  // 3. The stats second opinion
+  if (hasStats) {
+    if (s.prob > r.book_prob) good.push(`Past results agree: the stats give it a ${pct(s.prob)} chance, also above the ${pct(r.book_prob)} the price implies.`);
+    else risk.push(`Past results disagree: the stats give it only ${pct(s.prob)}, below the ${pct(r.book_prob)} the price implies.`);
+    if (s.expected_total != null && r.point != null) {
+      const unit = unitFor(r.sport_key);
+      const leans = (r.outcome === 'Over') === (s.expected_total > r.point);
+      (leans ? good : risk).push(`The stats expect about ${s.expected_total} total ${unit}, against a line of ${r.point}.`);
+    }
+    if (s.form_home && s.form_away && r.pick_team) {
+      const mine = r.pick_team === r.home_team ? s.form_home : s.form_away;
+      const theirs = r.pick_team === r.home_team ? s.form_away : s.form_home;
+      const opp = r.pick_team === r.home_team ? r.away_team : r.home_team;
+      const wins = x => +x.split('-')[0];
+      const line = `${r.pick_team} are ${mine} in their last 10 games; ${opp} are ${theirs}.`;
+      if (wins(mine) >= 6 && wins(mine) > wins(theirs)) good.push(line);
+      else if (wins(mine) <= 4 && wins(mine) < wins(theirs)) risk.push(line);
+    }
+  } else {
+    risk.push(`There's no stats second opinion for this bet${s && s.reason ? ` (${s.reason.toLowerCase()})` : ''}, so it rests on the market alone.`);
+  }
+
+  // 4. Confidence
+  if (c.level === 'high') good.push(`High confidence: ${c.why}.`);
+  if (c.level === 'low') risk.push(`Low confidence: ${c.why}.`);
+
+  // 5. Things that are always true
+  risk.push(`Even at a ${pct(ch, 0)} chance of success, this bet loses about ${100 - Math.round(ch * 100)} times in 100. Value only pays off over many bets.`);
+  if (r.player) risk.push('Player props are offered by fewer sportsbooks and can swing on late lineup or injury news.');
+  const d = daysAway(r.start);
+  if (d > 3) risk.push(`The game is ${Math.round(d)} days away, so injuries and lineup news could still move the line.`);
+  const at = state.results[r.sport_key] && state.results[r.sport_key].at;
+  risk.push(`Odds move. These were checked ${at ? ago(at) : 'earlier'}, so confirm the price in ${book} before you bet.`);
+
+  let verdict;
+  if (r.ev > 0.03 && (!hasStats || s.prob > r.book_prob)) verdict = ['good', 'Strong value', `${book} is paying noticeably more than this bet's chances are worth.`];
+  else if (r.ev > 0) verdict = ['good', 'Value pick', `${book} is paying a little more than this bet's chances are worth.`];
+  else if (r.ev > -0.02) verdict = ['ok', 'About a fair price', `${book}'s odds are close to what the bet's chances are worth, so there's no real edge.`];
+  else verdict = ['bad', 'Not a value bet', `${book} is paying less than this bet's chances are worth.`];
+  return { verdict, good, risk };
+}
+
+function betDetails(r) {
+  const book = state.book.name, s = statOf(r), hasStats = !!(s && s.prob != null);
+  const c = confidence(r), ex = explain(r);
+  const [tone, title, line] = ex.verdict;
+
+  // price comparison: this book, every other book, and the fair (no-margin) price
+  const cmp = r.compare || [];
+  const fairDec = 1 / r.fair_prob;
+  const rowsCmp = [{ book, price: r.decimal, american: r.american, cls: 'fd', note: ' (this bet)' },
+    ...cmp.map(o => ({ ...o, cls: '', note: o.sharp ? ' <small>sharp</small>' : '' })),
+    { book: 'Fair price', price: fairDec, american: americanOdds(fairDec), cls: 'fair', note: ' <small>no margin</small>' }]
+    .sort((a, b) => b.price - a.price);
+  const maxP = Math.max(...rowsCmp.map(o => o.price)), minP = Math.min(...rowsCmp.map(o => o.price));
+  const width = p => maxP === minP ? 100 : 15 + 85 * (p - minP) / (maxP - minP);
+
+  const form = s && s.form_home ? `<p>Last 10 games: ${esc(r.away_team)} ${esc(s.form_away)}, ${esc(r.home_team)} ${esc(s.form_home)}.</p>` : '';
+  return `
+    <button class="close" aria-label="Close">×</button>
+    <div class="bm-head">${avatarFor(r)}<div>
+      <h2 id="bmTitle">${esc(betLabel(r))}</h2>
+      <div class="sub">${esc(r.event)}, ${esc(r.sport)}, ${when(r.start)}. ${esc(r.market_label)}.</div>
+    </div></div>
+    <div class="bm-verdict ${tone}"><b>${title}.</b>${esc(line)}</div>
+    <div class="bm-nums">
+      <div class="hl"><b>${pct(chance(r), 0)}</b>chance of success</div>
+      <div><b>${c.label}</b>confidence</div>
+      <div><b>${signed(r.ev)}</b>value</div>
+      <div><b>${r.american}</b>${esc(book)} odds</div>
+      <div><b>${money((r.decimal - 1) * 100)}</b>profit on a $100 bet</div>
+    </div>
+
+    <h3>${ex.verdict[0] === 'good' ? 'Why it could be a good pick' : 'What it has going for it'}</h3>
+    ${ex.good.length ? `<ul class="good">${ex.good.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : '<p>Nothing stands out in its favor.</p>'}
+
+    <h3>Things to watch out for</h3>
+    <ul class="risk">${ex.risk.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+
+    <h3>How ${esc(book)}'s price compares</h3>
+    ${cmp.length ? `<p>Higher odds pay more. The fair price is what the odds would be with every book's margin removed.</p>
+      <div class="cmp">${rowsCmp.map(o => `
+        <span class="${o.cls}">${esc(o.book)}${o.note}</span><span class="o ${o.cls}">${o.american}</span>
+        <span class="bar ${o.cls}"><i style="width:${width(o.price).toFixed(0)}%"></i></span>`).join('')}</div>`
+      : '<p>Scan again to see each sportsbook\'s price for this bet.</p>'}
+
+    <h3>The numbers behind it</h3>
+    <ul>
+      <li>Market win chance: <b>${pct(r.fair_prob)}</b>, from ${r.books_used.length} other sportsbooks with their margins removed.</li>
+      <li>Stats win chance: <b>${hasStats ? pct(s.prob) : 'not available'}</b>${hasStats ? ', from this season\'s and last season\'s results' : ''}.</li>
+      <li>Chance of success: <b>${pct(chance(r))}</b>${hasStats ? ' (75% market, 25% stats)' : ' (market only)'}.</li>
+      <li>Chance ${esc(book)}'s price implies: <b>${pct(r.book_prob)}</b>, margin included.</li>
+      <li>Confidence: <b>${c.label}</b>, because of: ${esc(c.why)}.</li>
+    </ul>
+    ${form}`;
+}
+
+function openBet(r) {
+  if (!r) return;
+  $('#bmBody').innerHTML = betDetails(r);
+  $('#betModal').showModal();
+  $('#bmBody .close').onclick = () => $('#betModal').close();
+  $('#bmBody').scrollTop = 0;
+  loadImages();
+}
+
+$('#list').addEventListener('click', e => { const b = e.target.closest('.bet'); if (b) openBet(state.shown[+b.dataset.i]); });
+$('#list').addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('bet')) { e.preventDefault(); openBet(state.shown[+e.target.dataset.i]); }
+});
+$('#toppick').addEventListener('click', () => openBet(state.topPick));
+$('#toppick').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBet(state.topPick); } });
+// click outside the pop-up closes it (Esc closes it too, built in)
+$('#betModal').addEventListener('click', e => { if (e.target === $('#betModal')) $('#betModal').close(); });
 init().catch(e => { document.body.innerHTML = `<p style="padding:40px">Odd Finder couldn't start: ${esc(e.message)}</p>`; });
 </script>
 </body>
