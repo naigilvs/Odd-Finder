@@ -108,3 +108,20 @@ Every moneyline, spread, total and team total the bot shows for the NFL, NBA, NH
 - the stats model's own accuracy report
 
 The history is kept (about 1–3 MB a year) in `data/track.json`; saved picks are in `data/picks.json`. Both stay on your computer and off GitHub, and demo mode uses separate files.
+
+## Backups
+
+Your saved picks and the bot's track record are backed up to **iCloud Drive** automatically, in a folder called **Odd Finder backups**:
+
+- `latest/` has the newest copy, updated a few minutes after anything changes.
+- `daily/` has one copy per day for the last 30 days, so you can go back to an earlier day.
+
+If `data/picks.json` or `data/track.json` is missing when the bot starts (for example, the `data` folder was deleted), it's restored from the latest backup automatically and Terminal says so. Your API key (`config.json`) is never backed up. The menu shows when the last backup happened.
+
+To use a different folder, such as Dropbox or Google Drive, add it to `config.json`:
+
+```
+"backup_folder": "~/Dropbox/Odd Finder backups"
+```
+
+Demo mode doesn't make backups.

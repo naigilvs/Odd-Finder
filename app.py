@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import backup
 import picks
 import stats
 
@@ -164,6 +165,21 @@ _quota = {"remaining": None, "used": None}
 
 class ApiError(Exception):
     pass
+
+
+def load_config():
+    try:
+        cfg = json.loads((ROOT / "config.json").read_text())
+        return cfg if isinstance(cfg, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def backup_soon():
+    """Back up shortly after picks or results change (the backup itself skips unchanged files)."""
+    if BACKUP and time.time() - getattr(backup_soon, "last", 0) > 60:
+        backup_soon.last = time.time()
+        threading.Timer(5, BACKUP.run).start()
 
 
 def load_api_key():
@@ -391,6 +407,7 @@ class ImageFinder:
 IMAGES = None
 PICKS = picks.PickStore()       # saved picks, in data/picks.json
 TRACK = picks.TrackStore()      # every gradable bet the bot showed, in data/track.json
+BACKUP = None                   # copies picks and track record to iCloud Drive (not in demo mode)
 
 
 # --------------------------------------------------------------------------- analysis
@@ -677,7 +694,7 @@ def demo_events(sport, target, include_props):
     return events
 
 
-CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py"]
+CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py"]
 _started_with = {f: f.stat().st_mtime for f in CODE_FILES if f.exists()}
 
 
@@ -818,6 +835,8 @@ class Handler(BaseHTTPRequestHandler):
         """Bot track record: log bets, summarize, check results, clear."""
         action = body.get("action", "summary")
         since = body.get("since") if isinstance(body.get("since"), str) else None
+        if action in ("log", "grade", "clear"):
+            backup_soon()
         if action == "log":
             bets = body.get("bets") if isinstance(body.get("bets"), list) else []
             added, updated = TRACK.log(bets)
@@ -835,6 +854,8 @@ class Handler(BaseHTTPRequestHandler):
         """Saved picks: list, save, update (stake / manual result), delete, grade."""
         action = body.get("action", "list")
         try:
+            if action != "list":
+                backup_soon()
             if action == "save":
                 pick = PICKS.save(body.get("pick") or {}, body.get("stake"))
                 return self.send_json({"pick": pick, "picks": PICKS.all()})
@@ -880,6 +901,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "coming_soon": COMING_SOON_BOOKS,
                                 "demo": DEMO, "has_key": bool(API_KEY), "quota": _quota,
                                 "outdated": code_changed_since_start(),
+                                "backup": BACKUP.status() if BACKUP else {"enabled": False, "demo": DEMO},
                                 "prop_sports": list(PROP_MARKETS)})
             elif url.path == "/api/accuracy":
                 self.send_json(stats.accuracy())
@@ -920,7 +942,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global DEMO, API_KEY, IMAGES, PICKS, TRACK
+    global DEMO, API_KEY, IMAGES, PICKS, TRACK, BACKUP
     ap = argparse.ArgumentParser(description="Betting value finder")
     ap.add_argument("--demo", action="store_true", help="use made-up sample data")
     ap.add_argument("--port", type=int, default=8765)
@@ -931,6 +953,16 @@ def main():
     if DEMO:   # keep made-up demo picks and results apart from real ones
         PICKS = picks.PickStore(stats.DATA_DIR / "picks_demo.json")
         TRACK = picks.TrackStore(stats.DATA_DIR / "track_demo.json")
+    else:      # back up real picks and results, and restore them if they were deleted
+        folder = load_config().get("backup_folder")
+        BACKUP = backup.Backup(stats.DATA_DIR, Path(folder).expanduser() if folder else backup.default_folder())
+        restored = BACKUP.restore_missing()
+        if restored:
+            print(f"Restored from your backup in {BACKUP.status()['where']}: {', '.join(restored)}")
+            PICKS, TRACK = picks.PickStore(), picks.TrackStore()     # load the restored files
+        BACKUP.start()
+        if not BACKUP.enabled:
+            print("Backups are off: iCloud Drive wasn't found. Set \"backup_folder\" in config.json to choose a folder.")
     stats.warm_up()   # start downloading past results in the background
     if DEMO and not args.demo:
         print("No API key found (ODDS_API_KEY or config.json), so running with DEMO data.")

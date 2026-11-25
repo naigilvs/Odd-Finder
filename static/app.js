@@ -992,6 +992,21 @@ function openMenu() {
   $('#menuBtn').setAttribute('aria-expanded', 'true');
   requestAnimationFrame(() => document.body.classList.add('menu-open'));
   $('#sidebar .side-item[aria-current="page"]').focus();
+  showBackup();
+}
+
+// Backup status at the bottom of the menu.
+async function showBackup() {
+  try {
+    const b = (await getJSON('/api/config')).backup || {};
+    const el = $('#sideBackup');
+    el.className = 'side-backup' + (b.error || (!b.enabled && !b.demo) ? ' warn' : '');
+    el.textContent = b.demo ? 'Backups are off in demo mode.'
+      : !b.enabled ? 'Backups are off: iCloud Drive wasn\'t found on this Mac.'
+      : b.error ? b.error
+      : b.last ? `☁ Picks and results backed up to ${b.where} ${ago(new Date(b.last).getTime())}.`
+      : `☁ Picks and results are backed up to ${b.where} automatically.`;
+  } catch (e) { /* status is optional */ }
 }
 function closeMenu() {
   document.body.classList.remove('menu-open');
