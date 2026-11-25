@@ -154,7 +154,7 @@
   /* ---------- bet list ---------- */
   .list { border-top: 1px solid var(--line); }
   .bet {
-    display: grid; grid-template-columns: 44px minmax(0, 2.3fr) minmax(0, 1fr) 90px 150px 104px;
+    display: grid; grid-template-columns: 44px minmax(0, 2.3fr) minmax(0, 1fr) 90px 180px 104px;
     gap: 16px; align-items: center; padding: 14px 6px; border-bottom: 1px solid var(--line);
   }
   .bet .rank { font: 600 20px var(--display); color: var(--slate); text-align: right; }
@@ -193,6 +193,12 @@
   .ev.pos { background: var(--amber); color: var(--ink); }
   .ev.neg { background: var(--panel-2); color: var(--slate); }
   .tag-sharp { font-size: 12px; color: var(--turf); }
+  .probs .chance { color: var(--chalk); font-size: 13px; }
+  .probs .chance b { font: 700 24px/1 var(--display); margin-right: 2px; }
+  .conf { display: inline-block; margin: 3px 0 6px; padding: 0 7px; border-radius: 4px; font-size: 12px; font-weight: 600; border: 1px solid; cursor: help; }
+  .conf.high { color: var(--turf); border-color: var(--turf); }
+  .conf.medium { color: var(--amber); border-color: rgba(255,194,51,.6); }
+  .conf.low { color: var(--flag); border-color: rgba(240,99,90,.6); }
   .probs b.up { color: var(--turf); }
   .probs b.down { color: var(--slate); }
   .bet .what .form, .toppick .form { display: block; font-size: 12px; color: var(--slate); margin-top: 2px; }
@@ -291,12 +297,19 @@
 
       <div class="filters" id="filters" hidden>
         <label>Bet type<select id="fMarket"></select></label>
-        <label>Min. win chance %<input id="fProb" type="number" min="0" max="100" value="0"></label>
+        <label>Min. chance of success %<input id="fProb" type="number" min="0" max="100" value="0"></label>
+        <label>Confidence
+          <select id="fConf">
+            <option value="">Any</option>
+            <option value="medium">Medium or high</option>
+            <option value="high">High only</option>
+          </select>
+        </label>
         <label>Min. value %<input id="fEv" type="number" step="0.5" value="-100"></label>
         <label>Sort by
           <select id="sort">
             <option value="ev">Best value</option>
-            <option value="fair_prob">Most likely to win</option>
+            <option value="chance">Highest chance of success</option>
             <option value="start">Starting soonest</option>
           </select>
         </label>
@@ -313,6 +326,8 @@
       <summary>How Odd Finder ranks bets</summary>
       <div class="cols">
         <div><h4>Market win chance</h4><p>For each bet, Odd Finder looks up the same line at up to 9 other sportsbooks, strips out each book's built-in margin, and averages them. Sharp books like Pinnacle count extra because their prices are the most accurate.</p></div>
+        <div><h4>Chance of success</h4><p>The bot's single best guess at how often the bet hits: 75% the market's estimate and 25% the stats', or the market's alone when there are no stats. The market gets more weight because it tested as more accurate.</p></div>
+        <div><h4>Confidence</h4><p>How much to trust that number. It's higher when many sportsbooks offer the same line, when sharp books like Pinnacle are among them, and when market and stats agree. It's lower for player props and when the two opinions disagree. Hover over the badge to see why.</p></div>
         <div><h4>Stats win chance</h4><p>A second opinion from this season's and last season's results: team strength ratings, points scored and allowed, and home advantage. It doesn't know about injuries or news, so treat it as a check on the market, not a replacement. Covers moneylines, spreads and totals in the NFL, NBA, NHL and MLB.</p></div>
         <div><h4>Book's price</h4><p>The chance your sportsbook's odds imply, margin included. On each bet, the red tick on the bar marks it. When the bar runs past the tick, the bet's real chance is higher than the price suggests.</p></div>
         <div><h4>Value</h4><p>Market win chance × decimal odds − 1. A value of +5% means the bet returns about $5 per $100 on average over many bets like it. Most bets land below zero because of the margin. <b>Market + stats agree</b> marks bets where both opinions say the chance is higher than the price implies.</p></div>
@@ -472,9 +487,11 @@ function filtered() {
   const m = $('#fMarket').value, minP = +$('#fProb').value / 100, minEv = +$('#fEv').value / 100;
   const minBooks = +$('#minBooks').value || 1, key = $('#sort').value;
   return rowsInTab()
-    .filter(r => (!m || r.market_label === m) && r.fair_prob >= minP && r.ev >= minEv && r.books_used.length >= minBooks
-      && (!$('#fAgree').checked || agrees(r)))
-    .sort((a, b) => key === 'start' ? a.start.localeCompare(b.start) : b[key] - a[key]);
+    .filter(r => (!m || r.market_label === m) && chance(r) >= minP && r.ev >= minEv && r.books_used.length >= minBooks
+      && (!$('#fAgree').checked || agrees(r))
+      && (!$('#fConf').value || CONF_RANK[confidence(r).level] >= CONF_RANK[$('#fConf').value]))
+    .sort((a, b) => key === 'start' ? a.start.localeCompare(b.start)
+      : key === 'chance' ? chance(b) - chance(a) : b[key] - a[key]);
 }
 
 function renderResults(fresh) {
@@ -521,6 +538,8 @@ function renderResults(fresh) {
         ${agrees(top) ? '<em class="agree">Market + stats agree</em>' : ''}${formLine(top)}
         <div class="facts">
           <div><b>${top.american}</b>${esc(state.book.name)} odds</div>
+          <div><b>${pct(chance(top))}</b>chance of success</div>
+          <div><b>${confidence(top).label}</b>confidence</div>
           <div><b>${pct(top.fair_prob)}</b>market win chance</div>
           <div><b>${statOf(top) && statOf(top).prob != null ? pct(statOf(top).prob) : '–'}</b>stats win chance</div>
           <div><b>${pct(top.book_prob)}</b>chance the price implies</div>
@@ -538,6 +557,8 @@ function renderResults(fresh) {
       <div class="type">${esc(r.market_label)}<span class="when">${esc(r.sport)}, ${when(r.start)}</span></div>
       <div class="odds">${r.american}<small>${r.decimal.toFixed(2)}</small></div>
       <div class="probs" title="Compared with ${esc(r.books_used.join(', '))}">
+        <div class="chance"><b>${pct(chance(r), 0)}</b> chance of success</div>
+        ${confBadge(r)}<br>
         Market <b>${pct(r.fair_prob)}</b>
         <div class="meter"><i style="width:${(r.fair_prob * 100).toFixed(1)}%"></i><em style="left:${(r.book_prob * 100).toFixed(1)}%"></em></div>
         ${statLine(r)}<br>
@@ -563,6 +584,40 @@ const statOf = r => STATS.known[statKey(r)];
 const nick = n => (n || '').split(' ').slice(-1)[0];
 // Both opinions think the bet's chance is higher than FanDuel's price implies.
 const agrees = r => { const s = statOf(r); return !!(s && s.prob != null && r.ev > 0 && s.prob > r.book_prob); };
+
+// Chance of success: the market's estimate, blended 75/25 with the stats one when there is one.
+// The market gets more weight because it tested as more accurate.
+const MARKET_WEIGHT = 0.75;
+function chance(r) {
+  const s = statOf(r);
+  return s && s.prob != null ? MARKET_WEIGHT * r.fair_prob + (1 - MARKET_WEIGHT) * s.prob : r.fair_prob;
+}
+
+// Confidence: how much to trust the chance of success, from points for and against.
+function confidence(r) {
+  let score = 0;
+  const why = [];
+  const n = r.books_used.length;
+  if (n >= 7) { score += 2; why.push(`compared with ${n} sportsbooks`); }
+  else if (n >= 4) { score += 1; why.push(`compared with ${n} sportsbooks`); }
+  else why.push(`only ${n} sportsbook${n === 1 ? '' : 's'} to compare with`);
+  if (r.sharp) { score += 1; why.push('includes sharp books like Pinnacle'); }
+  const s = statOf(r);
+  if (s && s.prob != null) {
+    const sameSide = (s.prob > r.book_prob) === (r.fair_prob > r.book_prob);
+    if (sameSide && Math.abs(s.prob - r.fair_prob) <= 0.1) { score += 1; why.push('market and stats agree'); }
+    else { score -= 1; why.push('market and stats disagree'); }
+  }
+  if (r.player) { score -= 1; why.push('player props are thinner markets'); }
+  const level = score >= 3 ? 'high' : score >= 1 ? 'medium' : 'low';
+  return { level, label: level[0].toUpperCase() + level.slice(1), why: why.join(', ') };
+}
+const CONF_RANK = { low: 0, medium: 1, high: 2 };
+
+function confBadge(r) {
+  const c = confidence(r);
+  return `<span class="conf ${c.level}" title="${esc(c.label)} confidence: ${esc(c.why)}">${c.label} confidence</span>`;
+}
 
 function statLine(r) {
   const s = statOf(r);
@@ -717,6 +772,7 @@ $('#changeBook').onclick = showStart;
 $('#home').onclick = e => { e.preventDefault(); state.tab = 'all'; renderAll(); };
 ['#fMarket', '#fProb', '#fEv', '#sort', '#minBooks'].forEach(s => $(s).addEventListener('input', () => renderResults()));
 $('#fAgree').addEventListener('change', () => renderResults());
+$('#fConf').addEventListener('change', () => renderResults());
 $('#accBox').addEventListener('toggle', () => { if ($('#accBox').open) loadAccuracy(); });
 init().catch(e => { document.body.innerHTML = `<p style="padding:40px">Odd Finder couldn't start: ${esc(e.message)}</p>`; });
 </script>
