@@ -1219,7 +1219,7 @@ function loadLeagues() {
 }
 
 /* ---------------- My wagers ---------------- */
-const WAGERS = { list: [] };
+const WAGERS = { list: [], editing: null };
 const todayLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
 
 async function wagersApi(body) {
@@ -1240,6 +1240,34 @@ async function loadWagers() {
 function syncWonField() { $('#wWonWrap').hidden = $('#wResult').value !== 'won'; }
 function setWagerStatus(msg, err) { $('#wStatus').textContent = msg; $('#wStatus').className = 'status' + (err ? ' err' : ''); }
 
+// Put a wager into the form to change it; Save changes updates it, Cancel goes back to adding.
+function startEdit(w) {
+  WAGERS.editing = w.id;
+  $('#wDate').value = w.date;
+  $('#wNote').value = w.note || '';
+  $('#wWagered').value = w.wagered;
+  $('#wResult').value = w.result;
+  $('#wWon').value = w.result === 'won' ? w.won : '';
+  syncWonField();
+  $('#wAdd').textContent = 'Save changes';
+  $('#wCancel').hidden = false;
+  $('#wForm').classList.add('editing');
+  setWagerStatus(`Editing "${w.note || 'Wager'}". Change anything, then Save changes.`);
+  $('#wForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  (w.result === 'pending' ? $('#wResult') : $('#wWagered')).focus();
+  renderWagers();
+}
+
+function stopEdit() {
+  WAGERS.editing = null;
+  $('#wNote').value = ''; $('#wWagered').value = ''; $('#wWon').value = '';
+  $('#wResult').value = 'pending';
+  syncWonField();
+  $('#wAdd').textContent = 'Add wager';
+  $('#wCancel').hidden = true;
+  $('#wForm').classList.remove('editing');
+}
+
 function wagerCutoff() {
   const v = $('#wRange').value, today = todayLocal();
   if (!v) return null;
@@ -1254,21 +1282,25 @@ function renderWagers() {
   const list = WAGERS.list.filter(w => !cutoff || w.date >= cutoff);
   const s = Calc.wagerSummary(list);
   const tone = x => x > 0 ? 'up' : x < 0 ? 'down' : '';
-  $('#wSummary').innerHTML = list.length ? `
-    <div><b class="${tone(s.net)}">${signedDollars(s.net)}</b>${s.net >= 0 ? 'net profit' : 'net loss'}</div>
-    <div><b>${dollars(s.wagered)}</b>total wagered on ${s.count} bet${s.count === 1 ? '' : 's'}</div>
-    <div><b class="${tone(s.net)}">${s.roi != null ? signed(s.roi, 1) : '–'}</b>return on money wagered</div>
-    <div><b>${s.won}-${s.lost}${s.push ? `-${s.push}` : ''}</b>record (won-lost${s.push ? '-push' : ''})</div>` : '';
+  $('#wSummary').innerHTML = list.length ? [
+    s.count ? `<div><b class="${tone(s.net)}">${signedDollars(s.net)}</b>${s.net >= 0 ? 'net profit' : 'net loss'}</div>` : '',
+    s.count ? `<div><b>${dollars(s.wagered)}</b>wagered on ${s.count} settled bet${s.count === 1 ? '' : 's'}</div>` : '',
+    s.count ? `<div><b class="${tone(s.net)}">${s.roi != null ? signed(s.roi, 1) : '–'}</b>return on money wagered</div>` : '',
+    s.count ? `<div><b>${s.won}-${s.lost}${s.push ? `-${s.push}` : ''}</b>record (won-lost${s.push ? '-push' : ''})</div>` : '',
+    s.pending ? `<div><b>${dollars(s.atStake)}</b>at stake on ${s.pending} pending bet${s.pending === 1 ? '' : 's'}</div>` : '',
+  ].join('') : '';
   $('#wList').innerHTML = list.map(w => {
     const n = Calc.wagerNet(w);
-    const word = { won: 'Won', lost: 'Lost', push: 'Push' }[w.result];
+    const word = { won: 'Won', lost: 'Lost', push: 'Push', pending: 'Pending' }[w.result];
+    const amount = w.result === 'pending' ? `<span class="muted">${dollars(w.wagered)} at stake</span>` : `<span class="${tone(n)}"><b>${signedDollars(n)}</b></span>`;
     return `
-    <div class="pick ${w.result}">
+    <div class="pick ${w.result}${WAGERS.editing === w.id ? ' being-edited' : ''}">
       <div class="pmain"><b>${esc(w.note || 'Wager')}</b>
         <span>${new Date(w.date + 'T12:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span></div>
       <div class="pres"><span class="badge ${w.result}">${word}</span>
         <span class="muted small">Wagered ${dollars(w.wagered)}${w.result === 'won' ? `, won ${dollars(w.won)}` : ''}</span></div>
-      <div class="pact"><span class="${tone(n)}"><b>${signedDollars(n)}</b></span>
+      <div class="pact">${amount}
+        <button class="linkbtn" data-edit="${w.id}">${w.result === 'pending' ? 'Set result' : 'Edit'}</button>
         <button class="linkbtn remove" data-del="${w.id}" aria-label="Delete this wager">Delete</button></div>
     </div>`;
   }).join('');
@@ -1280,27 +1312,36 @@ function renderWagers() {
 
 $('#wResult').addEventListener('change', syncWonField);
 $('#wRange').addEventListener('change', renderWagers);
+$('#wCancel').addEventListener('click', () => { stopEdit(); setWagerStatus(''); renderWagers(); });
 $('#wForm').addEventListener('submit', async e => {
   e.preventDefault();
   const wager = { date: $('#wDate').value, note: $('#wNote').value.trim(), wagered: +$('#wWagered').value,
                   result: $('#wResult').value, won: +$('#wWon').value || 0 };
   if (!(wager.wagered > 0)) return setWagerStatus('Enter how much you wagered.', true);
   if (wager.result === 'won' && !(wager.won > 0)) return setWagerStatus('Enter how much you won (your profit, not counting the stake).', true);
+  const editing = WAGERS.editing;
   $('#wAdd').disabled = true;
   try {
-    await wagersApi({ action: 'add', wager });
-    $('#wNote').value = ''; $('#wWagered').value = ''; $('#wWon').value = '';
-    setWagerStatus(`Added: ${wager.result === 'won' ? `won ${dollars(wager.won)}` : wager.result === 'lost' ? `lost ${dollars(wager.wagered)}` : 'push'}.`);
+    await wagersApi(editing ? { action: 'update', id: editing, wager } : { action: 'add', wager });
+    const what = wager.result === 'won' ? `won ${dollars(wager.won)}` : wager.result === 'lost' ? `lost ${dollars(wager.wagered)}`
+      : wager.result === 'push' ? 'push' : `pending, ${dollars(wager.wagered)} at stake`;
+    stopEdit();
+    setWagerStatus(`${editing ? 'Saved' : 'Added'}: ${what}.`);
     renderWagers();
-    $('#wWagered').focus();
+    if (!editing) $('#wWagered').focus();
   } catch (err) { setWagerStatus(err.message, true); }
   $('#wAdd').disabled = false;
 });
 $('#wList').addEventListener('click', async e => {
+  const ed = e.target.closest('button[data-edit]');
+  if (ed) { const w = WAGERS.list.find(x => x.id === ed.dataset.edit); if (w) startEdit(w); return; }
   const b = e.target.closest('button[data-del]');
   if (!b || !confirm('Delete this wager? This can\'t be undone.')) return;
-  try { await wagersApi({ action: 'delete', id: b.dataset.del }); setWagerStatus('Wager deleted.'); }
-  catch (err) { setWagerStatus(err.message, true); }
+  try {
+    await wagersApi({ action: 'delete', id: b.dataset.del });
+    if (WAGERS.editing === b.dataset.del) stopEdit();
+    setWagerStatus('Wager deleted.');
+  } catch (err) { setWagerStatus(err.message, true); }
   renderWagers();
 });
 

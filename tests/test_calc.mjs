@@ -102,3 +102,13 @@ test('my wagers: net and totals', () => {
   assert.ok(Math.abs(s.roi - 15.45 / 110) < 1e-9);
   assert.equal(Calc.wagerSummary([]).roi, null);
 });
+
+test('my wagers: pending bets are kept out of profit and record', () => {
+  const w = (result, wagered, won = 0) => ({ result, wagered, won });
+  const s = Calc.wagerSummary([w('won', 50, 45.45), w('lost', 20), w('pending', 40), w('pending', 10)]);
+  assert.deepEqual([s.count, s.won, s.lost, s.pending], [2, 1, 1, 2]);
+  assert.equal(s.wagered, 70);
+  assert.equal(s.net, 25.45);
+  assert.equal(s.atStake, 50);
+  assert.equal(Calc.wagerNet(w('pending', 40)), 0);
+});

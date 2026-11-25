@@ -113,13 +113,17 @@
   function wagerNet(w) {
     return w.result === 'won' ? w.won : w.result === 'lost' ? -w.wagered : 0;
   }
+  // Pending bets (result not set yet) are kept out of profit and record: shown as money at stake.
   function wagerSummary(list) {
-    const s = { count: list.length, wagered: 0, net: 0, won: 0, lost: 0, push: 0 };
+    const s = { count: 0, wagered: 0, net: 0, won: 0, lost: 0, push: 0, pending: 0, atStake: 0 };
     for (const w of list) {
+      if (w.result === 'pending') { s.pending += 1; s.atStake += w.wagered; continue; }
+      s.count += 1;
       s.wagered += w.wagered;
       s.net += wagerNet(w);
       s[w.result] += 1;
     }
+    s.atStake = Math.round(s.atStake * 100) / 100;
     s.wagered = Math.round(s.wagered * 100) / 100;
     s.net = Math.round(s.net * 100) / 100;
     s.roi = s.wagered ? s.net / s.wagered : null;

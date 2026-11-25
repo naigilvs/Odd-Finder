@@ -436,4 +436,7 @@
   .wform label.grow { flex: 1 1 220px; }
   .wform input, .wform select { background: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; color: var(--chalk); min-width: 130px; }
   .wform small { font-size: 12px; color: var(--slate); }
-  .wform .btn-scan { margin-left: auto; }
+  .wform .wbuttons { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  .wform.editing { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
+  .pick.being-edited { background: rgba(255, 194, 51, .08); }
+  #wList .pick.pending { border-left-color: var(--amber); }

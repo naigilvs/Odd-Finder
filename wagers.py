@@ -2,12 +2,14 @@
 My wagers
 ---------
 A simple log of the bets you actually placed: the date, an optional note, how much
-you wagered, and whether it won (and how much), lost, or pushed. Kept in
-data/wagers.json on your computer and backed up with your picks.
+you wagered, and whether it won (and how much), lost, pushed, or is still pending
+(set the result later). Every entry can be edited. Kept in data/wagers.json on your
+computer and backed up with your picks.
 
 Net result of one wager:  won -> +amount won (profit, not counting the stake)
                           lost -> -amount wagered
                           push -> 0 (stake returned)
+                          pending -> not counted yet
 """
 import json
 import threading
@@ -17,7 +19,7 @@ from datetime import date, datetime, timezone
 import stats
 
 WAGERS_FILE = stats.DATA_DIR / "wagers.json"
-RESULTS = ("won", "lost", "push")
+RESULTS = ("pending", "won", "lost", "push")
 MAX_AMOUNT = 1_000_000
 
 
@@ -40,7 +42,7 @@ def clean(data):
         raise ValueError("Enter how much you wagered.")
     result = data.get("result")
     if result not in RESULTS:
-        raise ValueError("Choose whether it won, lost or pushed.")
+        raise ValueError("Choose whether it won, lost, pushed or is still pending.")
     won = _money(data.get("won") or 0, "amount won") if result == "won" else 0.0
     if result == "won" and won <= 0:
         raise ValueError("Enter how much you won (your profit, not counting the stake).")

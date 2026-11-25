@@ -31,7 +31,7 @@ class WagerLog(unittest.TestCase):
         bad = [({"wagered": 0, "result": "lost"}, "wagered"),
                ({"wagered": -5, "result": "lost"}, "between"),
                ({"wagered": "abc", "result": "lost"}, "number"),
-               ({"wagered": 10, "result": "maybe"}, "won, lost or pushed"),
+               ({"wagered": 10, "result": "maybe"}, "still pending"),
                ({"wagered": 10, "result": "won"}, "how much you won"),
                ({"wagered": 10, "result": "lost", "date": "2026-13-45"}, "date"),
                ({"wagered": float("nan"), "result": "lost"}, "between"),
@@ -55,6 +55,22 @@ class WagerLog(unittest.TestCase):
             self.store.update("nope", {"wagered": 1, "result": "lost"})
         self.store.delete(w["id"])
         self.assertEqual(self.store.all(), [])
+
+    def test_pending_now_result_later(self):
+        w = self.store.add({"date": "2026-11-25", "note": "Chiefs ML", "wagered": 40, "result": "pending", "won": 12})
+        self.assertEqual((w["result"], w["won"], wagers.net(w)), ("pending", 0.0, 0.0))      # not counted yet
+        self.store.update(w["id"], {"date": "2026-11-25", "note": "Chiefs ML", "wagered": 40, "result": "won", "won": 36.36})
+        got = wagers.WagerStore(self.store.path).all()[0]                                    # saved
+        self.assertEqual((got["result"], got["won"], wagers.net(got)), ("won", 36.36, 36.36))
+
+    def test_any_wager_can_be_edited_later(self):
+        w = self.store.add({"date": "2026-11-20", "note": "typo", "wagered": 100, "result": "won", "won": 90})
+        self.store.update(w["id"], {"date": "2026-11-19", "note": "Lakers -3.5", "wagered": 10, "result": "lost"})
+        got = self.store.all()[0]
+        self.assertEqual((got["date"], got["note"], got["wagered"], got["result"], got["won"]),
+                         ("2026-11-19", "Lakers -3.5", 10, "lost", 0.0))
+        self.assertEqual(got["id"], w["id"])                                                  # same entry, not a copy
+        self.assertEqual(len(self.store.all()), 1)
 
 
 if __name__ == "__main__":
