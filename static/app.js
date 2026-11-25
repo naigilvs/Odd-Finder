@@ -43,6 +43,10 @@ function pickBook(key) {
   state.book = state.cfg.books.find(b => b.key === key);
   localStorage.setItem('oddfinder.book', key);
   state.results = JSON.parse(localStorage.getItem(storeKey()) || '{}');
+  // Leagues you've scanned stay visible after a restart: tick any that have saved results,
+  // unless you unticked them yourself (then a note says they're hidden).
+  const unticked = new Set(JSON.parse(localStorage.getItem('oddfinder.unticked') || '[]'));
+  Object.keys(state.results).forEach(k => { if (!unticked.has(k)) state.picked.add(k); });
   try { more.rows = JSON.parse(localStorage.getItem(moreKey()) || '[]'); } catch (e) { more.rows = []; }
   saveMore();   // drops games that have already started
   $('#start').hidden = true;
@@ -85,6 +89,7 @@ function renderLeagues() {
     <label class="chip"><input type="checkbox" value="${s.key}" ${state.picked.has(s.key) ? 'checked' : ''}><span>${esc(s.title)}</span></label>`).join('');
   document.querySelectorAll('#leagues input').forEach(i => i.onchange = () => {
     i.checked ? state.picked.add(i.value) : state.picked.delete(i.value);
+    saveLeagues();
     renderScanButton();
     renderTabs();
     renderResults();
@@ -184,6 +189,11 @@ function renderResults(fresh) {
   if (latest && !$('#status').classList.contains('err')) {
     const pos = all.filter(r => r.ev > 0).length;
     setStatus(`${all.length} bets checked, ${pos} with positive value. Updated ${ago(latest)}.`);
+  }
+  const hidden = Object.keys(state.results).filter(k => (state.tab === 'all' || state.groupOf[k] === state.tab)
+    && !state.picked.has(k) && state.results[k].rows.length).length;
+  if (hidden && !$('#status').classList.contains('err')) {
+    $('#status').textContent += `${$('#status').textContent ? ' ' : ''}${hidden} scanned league${hidden > 1 ? 's are' : ' is'} hidden. Tick ${hidden > 1 ? 'them' : 'it'} above to show ${hidden > 1 ? 'their' : 'its'} bets.`;
   }
   $('#shown').textContent = list.length ? `Showing ${Math.min(list.length, 300)} of ${list.length}` : '';
 
@@ -400,7 +410,10 @@ async function init() {
     setStatus(e.message, true);
   }
   state.sports.forEach(s => state.groupOf[s.key] = s.group);
-  state.sports.forEach(s => { if (state.cfg.demo || POPULAR.includes(s.key)) state.picked.add(s.key); });
+  const remembered = loadLeagues();
+  state.sports.forEach(s => {
+    if (remembered ? remembered.includes(s.key) : (state.cfg.demo || POPULAR.includes(s.key))) state.picked.add(s.key);
+  });
   const saved = localStorage.getItem('oddfinder.book');
   if (saved && state.cfg.books.some(b => b.key === saved)) pickBook(saved); else showStart();
 }
@@ -1116,6 +1129,19 @@ $('#bClear').onclick = async () => {
   TRACK.sent = {};
   loadBot(false);
 };
+
+/* ---------------- Remembering ticked leagues ---------------- */
+function saveLeagues() {
+  try {
+    localStorage.setItem('oddfinder.leagues', JSON.stringify([...state.picked]));
+    // Leagues you unticked on purpose stay hidden even if they have saved results.
+    const unticked = state.sports.map(s => s.key).filter(k => !state.picked.has(k));
+    localStorage.setItem('oddfinder.unticked', JSON.stringify(unticked));
+  } catch (e) { /* storage full: not important */ }
+}
+function loadLeagues() {
+  try { return JSON.parse(localStorage.getItem('oddfinder.leagues')); } catch (e) { return null; }
+}
 
 // Start the app (kept last so everything above is defined first).
 init().catch(e => { document.body.innerHTML = `<p style="padding:40px">Odd Finder couldn't start: ${esc(e.message)}</p>`; });
