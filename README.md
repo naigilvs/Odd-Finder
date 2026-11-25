@@ -86,6 +86,10 @@ Run every test with one command. It needs no internet or API key; the page tests
 
 They check the valuation math (margin removal, value, matching lines across books, yes/no margins), bet labels, the stats model, the page's calculations, and the More bets safety checks.
 
+## Saved scans
+
+Your last scan of each league, and your More bets scans, are saved by the bot in `data/scans.json`. They're still there after you restart the bot or the browser, so you don't have to scan again (and spend credits) to see them. Rescanning a league replaces its saved bets; games that have started are dropped automatically. Scans aren't backed up: they're temporary copies of the odds.
+
 ## Menu, My picks and Bot results
 
 The **☰** button at the top left opens the menu: **Find bets** (main lines and more bets), **My picks** and **Bot results**.

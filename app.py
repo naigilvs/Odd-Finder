@@ -32,6 +32,7 @@ from pathlib import Path
 
 import backup
 import picks
+import scans
 import stats
 
 ROOT = Path(__file__).resolve().parent
@@ -407,6 +408,7 @@ class ImageFinder:
 IMAGES = None
 PICKS = picks.PickStore()       # saved picks, in data/picks.json
 TRACK = picks.TrackStore()      # every gradable bet the bot showed, in data/track.json
+SCANS = scans.ScanStore(stats.DATA_DIR / "scans.json")   # your last scans, kept across restarts
 BACKUP = None                   # copies picks and track record to iCloud Drive (not in demo mode)
 GITBACKUP = None                # and commits them to a private GitHub repo, if one is set
 
@@ -695,7 +697,7 @@ def demo_events(sport, target, include_props):
     return events
 
 
-CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py"]
+CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py"]
 _started_with = {f: f.stat().st_mtime for f in CODE_FILES if f.exists()}
 
 
@@ -807,7 +809,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track"):
+        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans"):
             return self.send_json({"error": "Not found"}, 404)
         length = int(self.headers.get("Content-Length") or 0)
         if length > 2_000_000:
@@ -822,6 +824,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_picks(body)
         if path == "/api/track":
             return self.handle_track(body)
+        if path == "/api/saved-scans":
+            book = body.get("book")
+            if body.get("action") != "clear_more" or book not in TARGET_BOOKS:
+                return self.send_json({"error": "Unknown action"}, 400)
+            SCANS.clear_more(book)
+            return self.send_json({"ok": True})
         items = body.get("items", [])
         items = [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
         if path == "/api/images":
@@ -918,7 +926,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": "Pick at least one sport."}, 400)
                 props = q.get("props", ["0"])[0] == "1"
                 min_books = max(1, int(q.get("min_books", ["2"])[0]))
-                self.send_json(run_scan(target, sports, props, min_books))
+                result = run_scan(target, sports, props, min_books)
+                SCANS.save_main(target, sports, result["rows"])
+                self.send_json(result)
+            elif url.path == "/api/saved-scans":
+                target = q.get("book", ["fanduel"])[0]
+                if target not in TARGET_BOOKS:
+                    return self.send_json({"error": f"Unknown sportsbook: {target}"}, 400)
+                self.send_json(SCANS.load(target))
             elif url.path == "/api/games":
                 sport = q.get("sport", [""])[0]
                 if not SAFE_ID.match(sport):
@@ -936,7 +951,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": "Pick at least one game and one bet type."}, 400)
                 if len(events) > MORE_MAX_GAMES:
                     return self.send_json({"error": f"Pick at most {MORE_MAX_GAMES} games at a time."}, 400)
-                self.send_json(run_more_scan(target, sport, events, markets))
+                result = run_more_scan(target, sport, events, markets)
+                SCANS.save_more(target, events, result["rows"])
+                self.send_json(result)
             else:
                 self.send_json({"error": "Not found"}, 404)
         except ApiError as e:
@@ -944,7 +961,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global DEMO, API_KEY, IMAGES, PICKS, TRACK, BACKUP, GITBACKUP
+    global DEMO, API_KEY, IMAGES, PICKS, TRACK, BACKUP, GITBACKUP, SCANS
     ap = argparse.ArgumentParser(description="Betting value finder")
     ap.add_argument("--demo", action="store_true", help="use made-up sample data")
     ap.add_argument("--port", type=int, default=8765)
@@ -955,6 +972,7 @@ def main():
     if DEMO:   # keep made-up demo picks and results apart from real ones
         PICKS = picks.PickStore(stats.DATA_DIR / "picks_demo.json")
         TRACK = picks.TrackStore(stats.DATA_DIR / "track_demo.json")
+        SCANS = scans.ScanStore(stats.DATA_DIR / "scans_demo.json")
     else:      # back up real picks and results, and restore them if they were deleted
         cfg = load_config()
         folder = cfg.get("backup_folder")

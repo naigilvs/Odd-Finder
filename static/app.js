@@ -39,16 +39,14 @@ function showStart() {
   document.querySelectorAll('.ticket.live').forEach(b => b.onclick = () => pickBook(b.dataset.book));
 }
 
-function pickBook(key) {
+async function pickBook(key) {
   state.book = state.cfg.books.find(b => b.key === key);
   localStorage.setItem('oddfinder.book', key);
-  state.results = JSON.parse(localStorage.getItem(storeKey()) || '{}');
+  await loadSavedScans();
   // Leagues you've scanned stay visible after a restart: tick any that have saved results,
   // unless you unticked them yourself (then a note says they're hidden).
   const unticked = new Set(JSON.parse(localStorage.getItem('oddfinder.unticked') || '[]'));
   Object.keys(state.results).forEach(k => { if (!unticked.has(k)) state.picked.add(k); });
-  try { more.rows = JSON.parse(localStorage.getItem(moreKey()) || '[]'); } catch (e) { more.rows = []; }
-  saveMore();   // drops games that have already started
   $('#start').hidden = true;
   $('#app').hidden = false;
   $('#bookName').textContent = state.book.name;
@@ -59,6 +57,20 @@ function pickBook(key) {
 }
 
 const storeKey = () => `oddfinder.results.${state.cfg.demo ? 'demo.' : ''}${state.book.key}`;
+
+// Your last scans are saved by the bot (data/scans.json), so they come back after a
+// restart with no size limit. Scans an older version saved in the browser are used
+// if the bot has none yet, then removed from the browser.
+async function loadSavedScans() {
+  let saved = null;
+  try { saved = await getJSON(`/api/saved-scans?book=${encodeURIComponent(state.book.key)}`); } catch (e) { /* older bot */ }
+  const fromBrowser = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
+  state.results = saved && Object.keys(saved.results).length ? saved.results : (fromBrowser(storeKey()) || {});
+  more.rows = saved && saved.more.length ? saved.more : (fromBrowser(moreKey()) || []);
+  saveMore();                                     // drop games that have started
+  // Only forget the browser copy once the bot has its own copy of the scans.
+  if (saved && Object.keys(saved.results).length) { localStorage.removeItem(storeKey()); localStorage.removeItem(moreKey()); }
+}
 
 /* ---------------- tabs + leagues ---------------- */
 function groups() {
@@ -121,7 +133,6 @@ async function scan() {
     clearTimeout(STATS.timer); STATS.timer = null;
     sports.forEach(k => state.results[k] = { rows: [], at });
     res.rows.forEach(r => (state.results[r.sport_key] ||= { rows: [], at }).rows.push(r));
-    try { localStorage.setItem(storeKey(), JSON.stringify(state.results)); } catch (e) { /* storage full: keep in memory */ }
     showCredits(res.quota);
     renderAll(true);
     if (res.errors.length) setStatus(`Some leagues couldn't be loaded: ${res.errors.join('; ')}`, true);
@@ -709,9 +720,8 @@ async function moreScan() {
 }
 
 function saveMore() {
-  // Drop games that have started, then save so reopening the site costs nothing.
+  // The bot saves More bets scans itself; here we just drop games that have started.
   more.rows = more.rows.filter(r => new Date(r.start) > Date.now());
-  try { localStorage.setItem(moreKey(), JSON.stringify(more.rows)); } catch (e) { /* storage full */ }
 }
 
 function setMoreStatus(msg, err) { $('#mStatus').textContent = msg; $('#mStatus').className = 'status' + (err ? ' err' : ''); }
@@ -768,7 +778,14 @@ $('#mAllGames').onclick = () => {
   renderMoreScan();
 };
 $('#mScan').onclick = moreScan;
-$('#mClear').onclick = () => { more.rows = []; saveMore(); setMoreStatus(''); renderMore(); };
+$('#mClear').onclick = async () => {
+  more.rows = [];
+  try {
+    await fetch('/api/saved-scans', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'clear_more', book: state.book.key }) });
+  } catch (e) { /* cleared on screen anyway */ }
+  setMoreStatus(''); renderMore();
+};
 ['#mfLeague', '#mfGame', '#mfType', '#mfConf', '#mfSort', '#mfBest'].forEach(s => $(s).addEventListener('change', renderMore));
 $('#mfWho').addEventListener('input', renderMore);
 $('#toppick').addEventListener('click', () => openBet(state.topPick));

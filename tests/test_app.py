@@ -146,6 +146,7 @@ class Server(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         app.PICKS = app.picks.PickStore(Path(cls.tmp.name) / "picks.json")   # never touch real picks
         app.TRACK = app.picks.TrackStore(Path(cls.tmp.name) / "track.json")
+        app.SCANS = app.scans.ScanStore(Path(cls.tmp.name) / "scans.json")
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -215,6 +216,20 @@ class Server(unittest.TestCase):
         self.assertEqual((summary["tracked"], summary["pending"]), (1, 1))
         self.assertEqual(self.post("/api/track", {"action": "clear"})[1]["summary"]["tracked"], 0)
         self.assertEqual(self.post("/api/track", {"action": "explode"})[0], 400)
+
+    def test_scans_are_saved_by_the_bot(self):
+        self.post("/api/saved-scans", {"action": "clear_more", "book": "fanduel"})   # other tests share this file
+        self.assertEqual(self.get("/api/saved-scans?book=fanduel")[1]["more"], [])
+        status, body = self.get("/api/scan?book=fanduel&sports=basketball_nba&min_books=1")
+        self.assertEqual(status, 200)
+        saved = self.get("/api/saved-scans?book=fanduel")[1]
+        self.assertEqual(len(saved["results"]["basketball_nba"]["rows"]), body["count"])
+        games = self.get("/api/games?sport=basketball_nba")[1]["games"]
+        self.get(f"/api/more-scan?book=fanduel&sport=basketball_nba&events={games[0]['id']}&markets=team_totals")
+        self.assertTrue(self.get("/api/saved-scans?book=fanduel")[1]["more"])
+        self.assertEqual(self.post("/api/saved-scans", {"action": "clear_more", "book": "fanduel"})[0], 200)
+        self.assertEqual(self.get("/api/saved-scans?book=fanduel")[1]["more"], [])
+        self.assertEqual(self.get("/api/saved-scans?book=nope")[0], 400)
 
     def test_config_reports_freshness(self):
         status, body = self.get("/api/config")
