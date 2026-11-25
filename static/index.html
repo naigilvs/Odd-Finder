@@ -516,7 +516,7 @@ function renderResults(fresh) {
     $('#toppick').innerHTML = `
       <div>
         <div class="label">Best value right now</div>
-        <div class="who">${avatarFor(top)}<h3>${esc(top.selection)}</h3></div>
+        <div class="who">${avatarFor(top)}<h3>${esc(betLabel(top))}</h3></div>
         <div class="event">${esc(top.event)}, ${esc(top.sport)}, ${when(top.start)}</div>
         ${agrees(top) ? '<em class="agree">Market + stats agree</em>' : ''}${formLine(top)}
         <div class="facts">
@@ -534,7 +534,7 @@ function renderResults(fresh) {
   $('#list').innerHTML = list.slice(0, 300).map((r, i) => `
     <div class="bet">
       <div class="rank">${i + 1}</div>
-      <div class="what">${avatarFor(r)}<div><b>${esc(r.selection)}</b><span>${esc(r.event)}</span>${formLine(r)}${agrees(r) ? '<em class="agree">Market + stats agree</em>' : ''}</div></div>
+      <div class="what">${avatarFor(r)}<div><b>${esc(betLabel(r))}</b><span>${esc(r.event)}</span>${formLine(r)}${agrees(r) ? '<em class="agree">Market + stats agree</em>' : ''}</div></div>
       <div class="type">${esc(r.market_label)}<span class="when">${esc(r.sport)}, ${when(r.start)}</span></div>
       <div class="odds">${r.american}<small>${r.decimal.toFixed(2)}</small></div>
       <div class="probs" title="Compared with ${esc(r.books_used.join(', '))}">
@@ -547,6 +547,13 @@ function renderResults(fresh) {
     </div>`).join('');
   loadImages();
   loadStats();
+}
+
+// Player props name the stat: "J. Carter Under 6.5 assists" (from the bet type, e.g. "Player assists").
+function betLabel(r) {
+  if (!r.player) return r.selection;
+  const stat = r.market_label.replace(/^(Player|Batter|Pitcher)\s+/i, '').toLowerCase();
+  return `${r.selection} ${stat}`;
 }
 
 /* ---------------- stats second opinion ---------------- */
