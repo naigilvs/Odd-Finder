@@ -106,7 +106,12 @@
   .chip span { display: inline-block; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line); font-size: 14px; color: var(--slate); cursor: pointer; user-select: none; }
   .chip input:checked + span { background: var(--chalk); border-color: var(--chalk); color: var(--ink); font-weight: 600; }
   .chip input:focus-visible + span { outline: 2px solid var(--amber); outline-offset: 2px; }
-  .scan-actions { display: flex; align-items: center; gap: 16px; }
+  .scan-actions { display: flex; align-items: flex-start; gap: 16px; }
+  .scan-actions .toggle { margin-top: 12px; }
+  .scan-col { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .credit-line { font-size: 13px; color: var(--slate); white-space: nowrap; }
+  .credit-line b { color: var(--chalk); font-weight: 600; }
+  .credit-line.low b { color: var(--flag); }
   .toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--slate); cursor: pointer; }
   .toggle input { accent-color: var(--amber); width: 16px; height: 16px; }
   .btn-scan {
@@ -243,7 +248,6 @@
     <div class="wrap">
       <a class="brand" href="#" id="home"><img src="/static/logo.svg" alt=""><span>Odd Finder</span></a>
       <div class="bookchip">
-        <span class="credits" id="credits"></span>
         <strong id="bookName"></strong>
         <button class="linkbtn" id="changeBook">Change<span class="wide"> sportsbook</span></button>
       </div>
@@ -258,7 +262,10 @@
       <div class="leagues" id="leagues" aria-label="Leagues to scan"></div>
       <div class="scan-actions">
         <label class="toggle"><input type="checkbox" id="props"> Player props</label>
-        <button class="btn-scan" id="scan">Scan odds</button>
+        <div class="scan-col">
+          <button class="btn-scan" id="scan">Scan odds</button>
+          <div class="credit-line" id="credits"></div>
+        </div>
       </div>
     </div>
     <div class="status" id="status" role="status"></div>
@@ -358,12 +365,14 @@ function groups() {
   return gs.sort((a, b) => (TAB_ORDER.indexOf(a) + 1 || 99) - (TAB_ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
 }
 const leaguesInTab = () => state.sports.filter(s => state.tab === 'all' || s.group === state.tab);
+// A league's bets are shown when it's in the open tab and its league button is ticked.
+const shown = (k, g = state.tab) => (g === 'all' || state.groupOf[k] === g) && state.picked.has(k);
 const rowsInTab = () => Object.entries(state.results)
-  .filter(([k]) => state.tab === 'all' || state.groupOf[k] === state.tab)
+  .filter(([k]) => shown(k))
   .flatMap(([, v]) => v.rows);
 
 function renderTabs() {
-  const count = g => Object.entries(state.results).filter(([k]) => g === 'all' || state.groupOf[k] === g)
+  const count = g => Object.entries(state.results).filter(([k]) => shown(k, g))
     .reduce((n, [, v]) => n + v.rows.filter(r => r.ev > 0).length, 0);
   const tab = (g, label, ico) => {
     const c = count(g);
@@ -380,6 +389,8 @@ function renderLeagues() {
   document.querySelectorAll('#leagues input').forEach(i => i.onchange = () => {
     i.checked ? state.picked.add(i.value) : state.picked.delete(i.value);
     renderScanButton();
+    renderTabs();
+    renderResults();
   });
   renderScanButton();
 }
@@ -418,7 +429,18 @@ async function scan() {
 }
 
 function setStatus(msg, err) { $('#status').textContent = msg; $('#status').className = 'status' + (err ? ' err' : ''); }
-function showCredits(q) { if (q && q.remaining != null) $('#credits').textContent = `${q.remaining} API credits left`; }
+function showCredits(q) {
+  const el = $('#credits');
+  if (state.cfg && state.cfg.demo) {
+    el.textContent = 'Demo mode uses no credits';
+  } else if (q && q.remaining != null) {
+    const left = Math.floor(+q.remaining);
+    el.innerHTML = `<b>${left.toLocaleString()}</b> API credits left`;
+    el.classList.toggle('low', left < 50);
+  } else if (!el.innerHTML) {
+    el.textContent = 'Credits left will show after a scan';
+  }
+}
 
 /* ---------------- results ---------------- */
 function filtered() {
@@ -436,11 +458,13 @@ function renderResults(fresh) {
   $('#fMarket').innerHTML = '<option value="">All bet types</option>' + markets.map(m => `<option>${esc(m)}</option>`).join('');
   $('#fMarket').value = markets.includes(cur) ? cur : '';
 
-  const scannedHere = Object.keys(state.results).filter(k => state.tab === 'all' || state.groupOf[k] === state.tab);
+  const scannedHere = Object.keys(state.results).filter(k => shown(k));
   const list = filtered();
   $('#filters').hidden = !all.length;
 
-  if (!scannedHere.length) {
+  if (!scanTargets().length) {
+    $('#empty').innerHTML = `<h3>No leagues selected</h3><p>Tap a league above to show its bets.</p>`;
+  } else if (!scannedHere.length) {
     const tabName = state.tab === 'all' ? 'any sport' : (TAB_NAMES[state.tab] || state.tab);
     $('#empty').innerHTML = `<div class="big" aria-hidden="true">${state.tab === 'all' ? '🏟️' : ICONS[state.tab] || '🏟️'}</div>
       <h3>No odds loaded for ${esc(tabName)} yet</h3><p>Pick the leagues above and press Scan to load ${esc(state.book.name)}'s lines.</p>`;
@@ -567,6 +591,7 @@ async function init() {
   showCredits(state.cfg.quota);
   try {
     state.sports = await getJSON('/api/sports');
+    getJSON('/api/config').then(c => showCredits(c.quota)).catch(() => {});  // sports call reports credits
   } catch (e) {
     state.sports = [];
     setStatus(e.message, true);
