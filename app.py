@@ -1004,6 +1004,7 @@ class Handler(BaseHTTPRequestHandler):
         """Bot track record: log bets, summarize, check results, clear."""
         action = body.get("action", "summary")
         since = body.get("since") if isinstance(body.get("since"), str) else None
+        view = body.get("view") if body.get("view") in ("side", "value", "all") else "side"
         if action in ("log", "grade", "clear"):
             backup_soon()
         if action == "log":
@@ -1012,12 +1013,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"added": added, "updated": updated})
         if action == "grade":
             graded = 0 if DEMO else TRACK.grade_pending(refresh=True)
-            return self.send_json({"graded": graded, "summary": picks.track_summary(TRACK.all(), since)})
+            return self.send_json({"graded": graded, "summary": picks.track_summary(TRACK.all(), since, view)})
         if action == "clear":
             TRACK.clear()
         elif action != "summary":
             return self.send_json({"error": "Unknown action"}, 400)
-        self.send_json({"summary": picks.track_summary(TRACK.all(), since)})
+        self.send_json({"summary": picks.track_summary(TRACK.all(), since, view)})
 
     def handle_picks(self, body):
         """Saved picks: list, save, update (stake / manual result), delete, grade."""

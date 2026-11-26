@@ -190,7 +190,7 @@ class TrackRecord(unittest.TestCase):
         bets = [done("won", 0.55, 0.05, agree=True), done("lost", 0.65, 0.02), done("won", 0.35, -0.03, conf="Low", decimal=3.0),
                 done("push", 0.5, 0.01), dict(pick(start=FUTURE), status="pending"),
                 done("won", 0.6, 0.1, start="2025-01-01T00:00:00+00:00")]
-        s = picks.track_summary(bets, since="2026-01-01T00:00:00+00:00")
+        s = picks.track_summary(bets, since="2026-01-01T00:00:00+00:00", view="all")
         self.assertEqual((s["tracked"], s["pending"], s["settled"]), (5, 1, 4))
         self.assertEqual((s["all"]["wins"], s["all"]["losses"], s["all"]["pushes"]), (2, 1, 1))
         self.assertAlmostEqual(s["all"]["win_rate"], 2 / 3)
@@ -201,7 +201,7 @@ class TrackRecord(unittest.TestCase):
         self.assertEqual([r["name"] for r in s["by_confidence"]], ["High", "Low"])
         self.assertEqual([r["name"] for r in s["calibration"]], ["30–40%", "50–60%", "60–70%"])
         self.assertEqual(s["by_type"][0]["name"], "Moneyline")
-        self.assertEqual(len(picks.track_summary(bets)["recent"]), 5)              # all time includes 2025
+        self.assertEqual(len(picks.track_summary(bets, view="all")["recent"]), 5)              # all time includes 2025
 
 
 def prop(**kw):
@@ -316,6 +316,62 @@ class SoccerGrading(unittest.TestCase):
         self.assertEqual(picks.grade(epl, 1, 1), "won")
         self.assertFalse(picks.auto_gradable(pick(sport_key="soccer_epl", market="spreads", point=-0.25)))   # split result
         self.assertFalse(picks.auto_gradable(pick(sport_key="soccer_uefa_champs_league")))                 # extra time
+
+
+class BotSide(unittest.TestCase):
+    """Bot results counts the bot's side of each bet: the side with the better value."""
+
+    @staticmethod
+    def side(sel, status, ev, fair, point=None, market="totals", event="g1", player=None, decimal=1.91, stats_prob=None):
+        b = {"event_id": event, "market": market, "selection": sel, "point": point, "player": player, "status": status,
+             "ev": ev, "fair_prob": fair, "chance": fair, "book_prob": 0.52, "decimal": decimal, "start": PAST,
+             "sport": "NBA", "sport_key": "basketball_nba"}
+        if stats_prob is not None:
+            b["stats_prob"] = stats_prob
+        return b
+
+    def bets(self):
+        s = self.side
+        return [
+            s("Over 220.5", "lost", 0.02, 0.53, 220.5, stats_prob=0.40), s("Under 220.5", "won", -0.06, 0.47, 220.5, stats_prob=0.60),
+            s("Lakers -3.5", "won", -0.01, 0.51, -3.5, "spreads"), s("Celtics +3.5", "lost", -0.03, 0.49, 3.5, "spreads"),
+            s("P Over 20.5", "won", -0.02, 0.50, 20.5, "player_points", player="P"),
+            s("P Under 20.5", "lost", -0.04, 0.50, 20.5, "player_points", player="P"),
+            s("Q Over 8.5", "won", -0.02, 0.50, 8.5, "player_points", player="Q"),        # other player: own bet
+            s("Home", "pending", 0.01, 0.40, None, "h2h", "g2"), s("Away", "pending", -0.05, 0.35, None, "h2h", "g2"),
+            s("Draw", "pending", -0.04, 0.25, None, "h2h", "g2"),                          # 3-way soccer moneyline
+        ]
+
+    def test_one_side_per_bet_with_the_best_value(self):
+        chosen = {b["selection"] for b in picks.bot_sides(self.bets())}
+        self.assertEqual(chosen, {"Over 220.5", "Lakers -3.5", "P Over 20.5", "Q Over 8.5", "Home"})
+
+    def test_a_moved_line_is_still_one_bet(self):
+        s = self.side
+        moved = [s("Over 223.5", "lost", -0.02, 0.49, 223.5), s("Under 223.5", "won", -0.05, 0.51, 223.5),
+                 s("Over 224.5", "lost", -0.06, 0.47, 224.5), s("Under 224.5", "won", -0.04, 0.53, 224.5)]
+        self.assertEqual([b["selection"] for b in picks.bot_sides(moved)], ["Over 223.5"])
+        self.assertEqual(picks.side_check(moved)[0]["bets"], 2)                      # two lines, each a pair
+
+    def test_views(self):
+        side = picks.track_summary(self.bets(), view="side")
+        self.assertEqual((side["view"], side["tracked"], side["settled"], side["pending"]), ("side", 5, 4, 1))
+        self.assertEqual((side["all"]["wins"], side["all"]["losses"]), (3, 1))
+        value = picks.track_summary(self.bets(), view="value")
+        self.assertEqual((value["tracked"], value["settled"]), (2, 1))                 # Over 220.5 and Home
+        every = picks.track_summary(self.bets(), view="all")
+        self.assertEqual((every["view"], every["tracked"]), ("all", 10))
+        self.assertEqual(picks.track_summary(self.bets(), view="nonsense")["view"], "all")
+
+    def test_which_side_won(self):
+        check = {r["name"]: r for r in picks.side_check([b for b in self.bets() if b["status"] != "pending"])}
+        bot = check["The bot's side (best value)"]
+        self.assertEqual((bot["bets"], bot["right"]), (3, 2))                          # total lost, spread and prop won
+        self.assertAlmostEqual(bot["profit"], 2 * 91 - 100)
+        market = check["Market's side (higher fair chance)"]
+        self.assertEqual((market["bets"], market["right"]), (2, 1))                    # the prop's 50/50 has no clear side
+        self.assertEqual(check["Stats' side"]["bets"], 1)                              # only the total has stats
+        self.assertEqual(check["Stats' side"]["right"], 1)
 
 
 if __name__ == "__main__":

@@ -251,8 +251,16 @@
             <option value="">All time</option>
           </select>
         </label>
+        <label>Count
+          <select id="bView">
+            <option value="side" selected>The bot's side of each bet</option>
+            <option value="value">Good-value bets only</option>
+            <option value="all">Every side logged (both sides)</option>
+          </select>
+        </label>
         <button class="linkbtn" id="bClear">Clear history</button>
       </div>
+      <p class="muted small" id="bViewNote"></p>
       <div class="psum" id="bSummary"></div>
       <div class="bgrid" id="bTables"></div>
       <h3 class="sub-title" id="bRecentTitle">Recent results</h3>

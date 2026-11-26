@@ -321,9 +321,68 @@ def _block(bets):
             "profit": round(profit, 2), "roi": profit / (100 * len(bets)) if bets else None}
 
 
-def track_summary(bets, since=None):
-    """How the bot's predictions turned out, for bets starting on or after `since` (ISO time)."""
+def side_key(b):
+    """The sides of one bet share a key: Over and Under 24.5, Lakers -3.5 and Celtics +3.5,
+    or all three outcomes of a soccer moneyline."""
+    point = b.get("point")
+    return (b["event_id"], b["market"], b.get("player") or "", b.get("team_total_for") or "",
+            abs(point) if point is not None else None)
+
+
+def bot_sides(bets):
+    """The bot's side of each bet: the one with the best value (the one ranked higher in Find
+    bets), the higher chance of success if values tie. A bet is one game's total, spread or
+    moneyline, or one player's stat: if the line moved between scans (Over 223.5, later Under
+    224.5) it is still one bet, so the bot gets one pick, not one per line."""
+    groups = {}
+    for b in bets:
+        groups.setdefault(side_key(b)[:4], []).append(b)          # every line and side of the bet
+    return [max(g, key=lambda b: (b.get("ev", 0), b.get("chance", b.get("fair_prob", 0)))) for g in groups.values()]
+
+
+def side_check(bets):
+    """In finished bets where one side won and another lost: how often each opinion chose the
+    winning side. Value (the bot's side) can favor the less likely side at a good price, so its
+    profit matters more than how often it's right."""
+    groups = {}
+    for b in bets:
+        groups.setdefault(side_key(b), []).append(b)
+    judges = [("The bot's side (best value)", lambda b: b.get("ev", 0)),
+              ("Higher chance of success", lambda b: b.get("chance", b.get("fair_prob", 0))),
+              ("Market's side (higher fair chance)", lambda b: b.get("fair_prob", 0)),
+              ("Stats' side", lambda b: b.get("stats_prob")),
+              ("Sportsbook favorite", lambda b: b.get("book_prob", 0))]
+    out = []
+    for name, f in judges:
+        right = total = 0
+        profit = 0.0
+        for g in groups.values():
+            statuses = {b["status"] for b in g}
+            if "won" not in statuses or "lost" not in statuses:
+                continue                                    # unfinished, pushed or only one side logged
+            if any(f(b) is None for b in g):
+                continue                                    # e.g. no stats opinion for this bet
+            top = max(g, key=f)
+            if sum(1 for b in g if f(b) == f(top)) > 1:
+                continue                                    # no clear side
+            total += 1
+            right += top["status"] == "won"
+            profit += 100 * (top["decimal"] - 1) if top["status"] == "won" else -100
+        if total:
+            out.append({"name": name, "bets": total, "right": right, "rate": right / total, "profit": round(profit, 2)})
+    return out
+
+
+def track_summary(bets, since=None, view="side"):
+    """How the bot's predictions turned out, for bets starting on or after `since` (ISO time).
+    view: "side" counts only the bot's side of each bet, "value" only good-value bets,
+    "all" every side logged."""
     sel = [b for b in bets if not since or b["start"] >= since]
+    check = side_check([b for b in sel if b["status"] in ("won", "lost", "push")])
+    if view == "side":
+        sel = bot_sides(sel)
+    elif view == "value":
+        sel = [b for b in sel if b.get("ev", 0) > 0]
     done = [b for b in sel if b["status"] in ("won", "lost", "push")]
 
     def group(key_fn, label_fn=lambda k: k):
@@ -340,6 +399,7 @@ def track_summary(bets, since=None):
             calibration.append(dict(_block(g), name=f"{round(lo * 100)}–{min(round(hi * 100), 100)}%"))
     recent = sorted(done, key=lambda b: b["start"], reverse=True)[:60]
     return {
+        "view": view if view in ("side", "value") else "all", "side_check": check,
         "tracked": len(sel), "pending": len(sel) - len(done), "settled": len(done),
         "all": _block(done),
         "value": _block([b for b in done if b.get("ev", 0) > 0]),

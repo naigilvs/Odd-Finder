@@ -1250,7 +1250,7 @@ async function loadBot(checkFirst) {
   if (checkFirst) { $('#bCheck').disabled = true; $('#bCheck').textContent = 'Checking…'; }
   try {
     const r = await fetch('/api/track', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: checkFirst ? 'grade' : 'summary', since: botSince() }) });
+      body: JSON.stringify({ action: checkFirst ? 'grade' : 'summary', since: botSince(), view: $('#bView').value }) });
     const j = await r.json();
     if (!r.ok || j.error) throw new Error(j.error || r.statusText);
     if (checkFirst) $('#bChecked').textContent = j.graded ? `${j.graded} result${j.graded > 1 ? 's' : ''} updated just now` : 'Checked just now: no new results';
@@ -1269,8 +1269,14 @@ function renderBot(s) {
   const rate = b => b.win_rate != null ? pct(b.win_rate, 0) : '–';
   const card = (big, cls, text) => `<div><b class="${cls || ''}">${big}</b>${text}</div>`;
   const a = s.all, v = s.value, g = s.agree;
+  const what = { side: "of the bot's sides", value: 'good-value bets', all: 'sides' }[s.view];
+  $('#bViewNote').innerHTML = {
+    side: "Counting only <b>the bot's side</b> of each bet: the side with the better value, the one ranked higher in Find bets. The other side is logged too, but left out here.",
+    value: 'Counting only <b>good-value bets</b>: the ones whose price beat their chance of winning when the bot last saw them.',
+    all: "Counting <b>every side logged</b>, both Over and Under, both teams. One side of each bet always wins, so the win rate here sits near 50% by design.",
+  }[s.view];
   $('#bSummary').innerHTML = s.tracked ? [
-    card(s.tracked, '', `bets tracked, ${s.pending} waiting for a result`),
+    card(s.tracked, '', `${what} tracked, ${s.pending} waiting for a result`),
     card(rate(a), '', a.expected != null ? `of finished bets won (${rec(a)}); the bot expected ${pct(a.expected, 0)}` : 'win rate, once games finish'),
     card(v.bets ? signedDollars(v.profit) : '–', tone(v.profit),
       v.bets ? `betting $100 on each good-value bet (${rec(v)}, ${signed(v.roi, 1)} return)` : 'on good-value bets, once games finish'),
@@ -1286,7 +1292,14 @@ function renderBot(s) {
       ${rows.map(r => `<tr><td>${esc(r.name)}</td><td class="n">${r.bets}</td><td class="n">${rate(r)}</td>
         <td class="n">${r.expected != null ? pct(r.expected, 0) : '–'}</td><td class="n ${tone(r.profit)}">${signedDollars(r.profit)}</td></tr>`).join('')}
       </table></section>` : '';
-  $('#bTables').innerHTML =
+  const sides = (s.side_check || []).length ? `
+    <section class="bcard"><h3>Which side won?</h3>
+      <p>In finished bets where one side won and the other lost, how often each opinion chose the winner, and the result of $100 on its choice each time. The bot picks by value, which can mean the less likely side at a good price, so its profit matters more than how often it's right.</p>
+      <table><tr><th>Choosing the side by…</th><th class="n">Bets</th><th class="n">Right</th><th class="n">$100 each</th></tr>
+      ${s.side_check.map(r => `<tr><td>${esc(r.name)}</td><td class="n">${r.bets}</td><td class="n">${pct(r.rate, 0)}</td>
+        <td class="n ${tone(r.profit)}">${signedDollars(r.profit)}</td></tr>`).join('')}
+      </table></section>` : '';
+  $('#bTables').innerHTML = sides +
     table('When the bot said…', 'If its chances are right, each row wins about as often as expected. Give it a few hundred bets before reading much into it.', s.calibration, 'Chance of success') +
     table('By confidence', 'High confidence should be the most reliable.', s.by_confidence, 'Confidence') +
     table('By league', '', s.by_league, 'League') +
@@ -1307,6 +1320,7 @@ function renderBot(s) {
 
 $('#bCheck').onclick = () => loadBot(true);
 $('#bRange').addEventListener('change', () => loadBot(false));
+$('#bView').addEventListener('change', () => loadBot(false));
 $('#bClear').onclick = async () => {
   if (!confirm('Clear the bot\'s whole track record? Every logged bet and result will be deleted. Your saved picks are not affected.')) return;
   await fetch('/api/track', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear' }) });
