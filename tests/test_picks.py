@@ -162,6 +162,13 @@ class TrackRecord(unittest.TestCase):
         self.assertFalse(bets[0]["agree"])                                  # latest scan wins
         self.assertEqual(picks.TrackStore(self.track.path).all()[0]["decimal"], 2.4)   # saved to disk
 
+    def test_keeps_the_starting_price_when_the_line_moves(self):
+        self.track.log([pick(start=FUTURE, decimal=2.2, american="+120")])
+        self.track.log([pick(start=FUTURE, decimal=2.0, american="+100", open_decimal=9.9)])   # page can't overwrite it
+        b = self.track.all()[0]
+        self.assertEqual((b["open_decimal"], b["open_american"]), (2.2, "+120"))
+        self.assertEqual((b["decimal"], b["american"]), (2.0, "+100"))
+
     def test_finished_bets_are_not_changed_by_rescans(self):
         self.track.log([pick(start=FUTURE)])
         self.track.picks[0]["status"] = "won"

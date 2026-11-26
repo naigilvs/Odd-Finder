@@ -31,7 +31,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import backup
+import injuries
 import picks
+import props_stats
 import scans
 import wagers
 import stats
@@ -737,7 +739,7 @@ def demo_events(sport, target, include_props):
     return events
 
 
-CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py", ROOT / "props_stats.py", ROOT / "wagers.py"]
+CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py", ROOT / "props_stats.py", ROOT / "wagers.py", ROOT / "injuries.py"]
 _started_with = {f: f.stat().st_mtime for f in CODE_FILES if f.exists()}
 
 
@@ -816,6 +818,22 @@ def demo_more_event(sport, eid, markets):
     return dict(ev, bookmakers=books)
 
 
+def demo_injury_report(sport):
+    """Made-up injury report for demo mode: two demo players and one per demo team."""
+    if sport not in injuries.PATHS:
+        return None
+    teams = {e["home_team"] for e in demo_events(sport, "fanduel", False)}
+    made_up = [(DEMO_PLAYERS[0], "Questionable", "question", "Ankle soreness; a game-time decision (demo)."),
+               (DEMO_PLAYERS[1], "Out", "out", "Won't play tonight (demo).")]
+    players = [{"name": n, "key": props_stats.name_key(n), "team": t, "status": st, "level": lv, "comment": c,
+                "date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ"), "returns": "", "position": ""}
+               for n, st, lv, c in made_up for t in teams]
+    players += [{"name": f"Bench Player {i}", "key": f"bench player {i}", "team": t, "status": "Day-To-Day",
+                 "level": "question", "comment": "Illness (demo).", "date": "", "returns": "", "position": ""}
+                for i, t in enumerate(sorted(teams), 1)]
+    return {"updated": datetime.now(timezone.utc).isoformat(), "players": players}
+
+
 def demo_stats(items):
     """Made-up stats for demo mode: the market's chance nudged up or down a little."""
     out = {}
@@ -885,7 +903,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans", "/api/wagers"):
+        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans", "/api/wagers", "/api/injuries"):
             return self.send_json({"error": "Not found"}, 404)
         length = int(self.headers.get("Content-Length") or 0)
         if length > 20_000_000:          # room for a full browser copy of saved scans
@@ -919,6 +937,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/images":
             found, pending = IMAGES.get(items)
             return self.send_json({"images": found, "pending": pending})
+        if path == "/api/injuries":
+            return self.send_json(injuries.lookup(items, demo_injury_report if DEMO else injuries.report))
         if DEMO:
             return self.send_json({"stats": demo_stats(items), "pending": 0})
         found, pending = stats.predict_many(items)

@@ -18,7 +18,8 @@
   }
 
   // Confidence: how much to trust the chance of success, from points for and against.
-  function confidence(r, s) {
+  // `inj` is the bet's injury news ({player} for a prop whose player is on the report).
+  function confidence(r, s, inj) {
     let score = 0;
     const why = [];
     const n = r.books_used.length;
@@ -33,6 +34,12 @@
     }
     if (r.player) { score -= 1; why.push('player props are thinner markets'); }
     if (r.estimated) { score -= 2; why.push('books only offer the "Yes" side, so their margin had to be estimated'); }
+    const p = inj && inj.player;
+    if (p) {
+      // Out: the prices are probably stale. Doubtful / questionable: the player may not play.
+      score -= p.level === 'out' ? 10 : p.level === 'doubtful' ? 3 : 2;
+      why.push(`${p.name} is listed ${p.status.toLowerCase()} on the injury report`);
+    }
     const level = score >= 3 ? 'high' : score >= 1 ? 'medium' : 'low';
     return { level, label: level[0].toUpperCase() + level.slice(1), why: why.join(', ') };
   }

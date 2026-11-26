@@ -272,7 +272,7 @@ function betRow(r, i, which) {
   return `
     <div class="bet" data-list="${which}" data-i="${i}" role="button" tabindex="0" aria-label="Show details for ${esc(betLabel(r))}">
       <div class="rank">${i + 1}${starButton(r)}</div>
-      <div class="what">${avatarFor(r)}<div><b>${esc(betLabel(r))}</b><span>${esc(r.event)}</span>${formLine(r)}${r.others && r.others.length ? `<span class="more-lines">+${r.others.length} other line${r.others.length > 1 ? 's' : ''} for this bet</span>` : ''}${agrees(r) ? '<em class="agree">Market + stats agree</em>' : ''}</div></div>
+      <div class="what">${avatarFor(r)}<div><b>${esc(betLabel(r))}</b><span>${esc(r.event)}</span>${formLine(r)}${r.others && r.others.length ? `<span class="more-lines">+${r.others.length} other line${r.others.length > 1 ? 's' : ''} for this bet</span>` : ''}${agrees(r) ? '<em class="agree">Market + stats agree</em>' : ''}${injTag(r)}</div></div>
       <div class="type">${esc(r.market_label)}<span class="when">${esc(r.sport)}, ${when(r.start)}</span></div>
       <div class="odds">${r.american}<small>${r.decimal.toFixed(2)}</small></div>
       <div class="probs" title="Compared with ${esc(r.books_used.join(', '))}">
@@ -297,7 +297,7 @@ const nick = n => (n || '').split(' ').slice(-1)[0];
 // Calculations live in calc.js; these pass in each bet's stats opinion.
 const agrees = r => Calc.agrees(r, statOf(r));
 const chance = r => Calc.chance(r, statOf(r));
-const confidence = r => Calc.confidence(r, statOf(r));
+const confidence = r => Calc.confidence(r, statOf(r), injOf(r));
 const CONF_RANK = Calc.CONF_RANK;
 
 function confBadge(r) {
@@ -318,9 +318,64 @@ function formLine(r) {
   return `<span class="form">Last 10: ${esc(nick(r.away_team))} ${esc(s.form_away)}, ${esc(nick(r.home_team))} ${esc(s.form_home)}</span>`;
 }
 
+/* ---------------- injury report (ESPN, NBA / NHL / NFL) ---------------- */
+const INJ = { known: {}, teams: {}, updated: {}, at: 0, busy: false };
+const injOf = r => INJ.known[statKey(r)];
+const INJ_WORD = { out: 'Out', doubtful: 'Doubtful', question: 'Questionable' };
+
+// The page asks for every bet's injury news; the server keeps ESPN's report for 20 minutes,
+// so ask again for everything when ours is older than that.
+async function loadInjuries() {
+  if (INJ.busy) return;
+  if (Date.now() - INJ.at > 20 * 60 * 1000) { INJ.known = {}; INJ.at = Date.now(); }
+  const rows = Object.values(state.results).flatMap(v => v.rows).concat(more.rows)
+    .filter(r => !(statKey(r) in INJ.known));
+  if (!rows.length) return;
+  INJ.busy = true;
+  let changed = false;
+  try {
+    const items = [...new Map(rows.map(r => [statKey(r), { key: statKey(r), sport_key: r.sport_key,
+      player: r.player, home: r.home_team, away: r.away_team }])).values()];
+    const res = await (await fetch('/api/injuries', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }) })).json();
+    Object.assign(INJ.known, res.injuries || {});
+    Object.assign(INJ.teams, res.teams || {});
+    Object.assign(INJ.updated, res.updated || {});
+    changed = Object.values(res.injuries || {}).some(x => x.player);
+    // bets in leagues without a report: remember there's nothing, so we don't ask again
+    rows.forEach(r => { if (!(statKey(r) in INJ.known)) INJ.known[statKey(r)] = {}; });
+  } catch (e) { /* injury news is optional */ }
+  INJ.busy = false;
+  if (changed) { renderTabs(); renderResults(); if (!$('#moreView').hidden) renderMore(); }
+}
+
+function injTag(r) {
+  const p = (injOf(r) || {}).player;
+  if (!p) return '';
+  return `<em class="inj ${p.level}" title="${esc(p.comment)}">⚠ ${esc(p.name)}: ${esc(p.status)}</em>`;
+}
+
+// Pop-up section: the player's status, or both teams' injury lists for a game bet.
+function injSection(r) {
+  const x = injOf(r);
+  if (!x) return '';
+  const upd = INJ.updated[r.sport_key];
+  const src = `<p class="muted small">From ESPN's injury report${upd ? `, updated ${ago(new Date(upd).getTime())}` : ''}. Shown as a warning only: it isn't part of the chance of success.</p>`;
+  const item = p => `<li><b>${esc(p.name)}</b>${p.position ? ` (${esc(p.position)})` : ''}: <span class="inj-word ${p.level}">${esc(p.status)}</span>${p.comment ? `. ${esc(p.comment)}` : ''}${p.date ? ` <span class="muted">(${ago(new Date(p.date).getTime())})</span>` : ''}</li>`;
+  if (r.player) {
+    return x.player ? `<h3>Injury report</h3><ul class="inj-list">${item(x.player)}</ul>${src}`
+      : `<h3>Injury report</h3><p>${esc(r.player)} isn't on the injury report.</p>${src}`;
+  }
+  if (!x.teams) return '';
+  const lists = x.teams.map(k => [k.split('|').slice(1).join('|'), INJ.teams[k] || []]);
+  return `<h3>Injury report</h3>${lists.map(([team, ps]) => `<p><b>${esc(team)}</b>${ps.length ? '' : ': nobody listed'}</p>
+    ${ps.length ? `<ul class="inj-list">${ps.slice(0, 12).map(item).join('')}${ps.length > 12 ? `<li class="muted">and ${ps.length - 12} more</li>` : ''}</ul>` : ''}`).join('')}${src}`;
+}
+
 // Ask the server for the stats opinion on every bet we have. Leagues whose past
 // results are still downloading come back as "pending", so ask again shortly.
 async function loadStats(fromTimer) {
+  if (!fromTimer) loadInjuries();
   if (STATS.busy || (STATS.timer && !fromTimer)) return;
   STATS.timer = null;
   const rows = Object.values(state.results).flatMap(v => v.rows).concat(more.rows)
@@ -545,6 +600,10 @@ function explain(r) {
 
   // 5. Things that are always true
   risk.push(`Even at a ${pct(ch, 0)} chance of success, this bet loses about ${100 - Math.round(ch * 100)} times in 100. Value only pays off over many bets.`);
+  const ip = (injOf(r) || {}).player;
+  if (ip) risk.unshift(ip.level === 'out'
+    ? `${ip.name} is listed ${ip.status} on the injury report. If the player doesn't play, sportsbooks usually cancel the bet, but the odds and chances here may be out of date.`
+    : `${ip.name} is listed ${ip.status} on the injury report${ip.comment ? ` (${ip.comment})` : ''}. Check that the player is playing before you bet.`);
   if (r.player) risk.push('Player props are offered by fewer sportsbooks and can swing on late lineup or injury news.');
   if (r.estimated) risk.push('Some sportsbooks only offer the "Yes" side of this bet and no other players to measure their margin from, so the bot guessed it (about 10%). Treat the chance as rough.');
   else if (r.margin_measured) good.push('Sportsbooks only offer "Yes" here, but their margin was measured from the Yes/No lines they offer other players in this game, so the chance is more reliable than a guess.');
@@ -604,6 +663,8 @@ function betDetails(r) {
 
     <h3>Things to watch out for</h3>
     <ul class="risk">${ex.risk.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+
+    ${injSection(r)}
 
     <h3>How ${esc(book)}'s price compares</h3>
     ${cmp.length ? `<p>Higher odds pay more. The fair price is what the odds would be with every book's margin removed.</p>

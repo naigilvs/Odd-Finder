@@ -290,6 +290,9 @@ class TrackStore(PickStore):
                     continue
                 bet.update({"id": uuid.uuid4().hex[:12], "first_seen": now.isoformat(), "last_seen": now.isoformat(),
                             "status": "pending", "auto": True})
+                # The price when first seen: later scans update the current price, so the two
+                # show how the line moved (and, near the start, how the closing price compares).
+                bet.update({f"open_{k}": bet[k] for k in ("american", "decimal", "fair_prob", "point") if k in bet})
                 self.picks.append(bet)
                 index[_key(bet)] = bet
                 added += 1

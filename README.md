@@ -79,6 +79,12 @@ Player props also get a stats opinion where it has proven itself (`props_stats.p
 | NHL | points (+3.7%), shots on goal (+3.2%) | |
 | NFL | rushing yards (+3.1%), receiving yards (+2.3%), receptions (+2.5%) | passing yards |
 
+## Injury report
+
+For the NBA, NHL and NFL the page checks ESPN's free injury report (refreshed at most every 20 minutes; ESPN has none for soccer). A player prop whose player is listed gets a warning tag on its row (red for **Out**, injured reserve or suspended; amber for **Doubtful**, **Questionable** or **Day-To-Day**) and lower confidence: Out drops it to Low, Doubtful or Questionable lowers it a step or two. The bet's pop-up shows the player's status and ESPN's note, and game bets (moneyline, spread, total) list both teams' injured players. Injury news is a warning only: it isn't part of the chance of success, because it hasn't been tested against past results. NHL starting goalies aren't on the report.
+
+The bot results tracker also keeps each bet's **starting price** (the odds when the bot first saw it) next to the latest one, so line movement and closing prices can be measured once a few weeks of data have built up.
+
 ## More bets
 
 The **More bets** switch at the top opens a separate section for alternate lines, team totals, halves/quarters/periods, over/under player props and yes/no props (anytime touchdown, double-double, home run…). Nothing there uses credits until you ask:
@@ -93,6 +99,7 @@ Results are saved in your browser until the games start. Alternate lines and tea
 
 - `app.py`: the server: downloads odds, values every bet, and serves the page.
 - `stats.py`: the stats second opinion from past results.
+- `injuries.py`: ESPN's injury report for the NBA, NHL and NFL.
 - `static/index.html`, `static/app.css`, `static/app.js`: the page's layout, styling and behavior.
 - `static/calc.js`: the page's calculations (chance of success, confidence, best line per bet).
 - `tests/`: automated tests.

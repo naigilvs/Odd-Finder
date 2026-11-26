@@ -464,3 +464,10 @@
   .pmain ol.legs { margin: 4px 0 2px; padding-left: 20px; font-size: 13px; color: var(--slate); }
   .pmain ol.legs li { margin: 1px 0; }
   @media (max-width: 860px) { .wrow .leg { grid-template-columns: 1fr auto; } .wrow .leg .lnum { grid-column: 1 / -1; } }
+  .inj { display: inline-block; margin: 5px 0 0 6px; font: normal 600 12px var(--body); border-radius: 4px; padding: 1px 7px; color: var(--ink); background: var(--amber); }
+  .inj.out { background: #e5484d; color: #fff; }
+  .what .inj:first-of-type { margin-left: 0; }
+  .agree + .inj { margin-left: 6px; }
+  .inj-list { margin: 4px 0 8px; }
+  .inj-word { font-weight: 600; color: var(--amber); }
+  .inj-word.out { color: #ff6b6f; }

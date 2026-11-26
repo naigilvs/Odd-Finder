@@ -146,3 +146,14 @@ test('parlays: combined odds and result', () => {
   assert.equal(Calc.parlayResult(['won', 'push']), 'won');
   assert.equal(Calc.parlayResult(['push', 'push']), 'push');
 });
+
+test('injury news lowers confidence', () => {
+  const inj = (level, status) => ({ player: { name: 'J. Smith', level, status } });
+  const prop = bet({ player: 'J. Smith', sharp: true });                   // 7 books + sharp - prop = medium
+  assert.equal(Calc.confidence(prop).level, 'medium');
+  assert.equal(Calc.confidence(prop, undefined, inj('question', 'Questionable')).level, 'low');
+  const out = Calc.confidence(bet(), { prob: 0.56 }, inj('out', 'Out'));    // even a high one drops to low
+  assert.equal(out.level, 'low');
+  assert.match(out.why, /listed out on the injury report/);
+  assert.equal(Calc.confidence(bet(), { prob: 0.56 }, {}).level, 'high');   // not on the report
+});
