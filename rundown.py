@@ -182,14 +182,33 @@ def fetch_events(key, sport_key, sport_title, now=None):
     if sid is None:
         return None                                    # not on TheRundown's free plan
     now = now or datetime.now(timezone.utc)
-    offset = -int(datetime.now().astimezone().utcoffset().total_seconds() // 60)   # minutes behind UTC
-    local_today = (now - timedelta(minutes=offset)).date()
+    local_today = (now - timedelta(minutes=_offset())).date()
     events = []
     for d in range(DAYS_AHEAD.get(sport_key, DEFAULT_DAYS)):
-        day = (local_today + timedelta(days=d)).isoformat()
-        data = _get(key, f"sports/{sid}/events/{day}", market_ids="1,2,3", main_line="true", offset=offset)
-        for ev in data.get("events") or []:
-            c = convert(ev, sport_key, sport_title)
-            if c and c["bookmakers"]:
-                events.append(c)
+        events += fetch_day(key, sport_key, sport_title, (local_today + timedelta(days=d)).isoformat())
     return events
+
+
+def _offset():
+    """Minutes this computer's clock is behind UTC (TheRundown's `offset`: which day a game is on)."""
+    return -int(datetime.now().astimezone().utcoffset().total_seconds() // 60)
+
+
+def local_day(iso):
+    """The local date (YYYY-MM-DD) of an ISO start time, as TheRundown files games by day."""
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return (t - timedelta(minutes=_offset())).date().isoformat()
+
+
+def fetch_day(key, sport_key, sport_title, day):
+    """One league's games on one local day (YYYY-MM-DD), Odds API-style; [] if not covered."""
+    sid = SPORT_IDS.get(sport_key)
+    if sid is None:
+        return []
+    data = _get(key, f"sports/{sid}/events/{day}", market_ids="1,2,3", main_line="true", offset=_offset())
+    out = []
+    for ev in data.get("events") or []:
+        c = convert(ev, sport_key, sport_title)
+        if c and c["bookmakers"]:
+            out.append(c)
+    return out

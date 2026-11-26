@@ -648,6 +648,41 @@ def analyze_event(event, target, min_books):
     return rows
 
 
+def closing_scan_once(now=None):
+    """Closing prices for tracked moneylines, spreads and totals whose games start within 15
+    minutes, from TheRundown's free odds (no credits). Returns how many bets got one."""
+    if not RUNDOWN_KEY or DEMO:
+        return 0
+    by_sport = {}
+    for b in TRACK.due_for_close(now):
+        if b.get("sport_key") in rundown.SPORT_IDS:
+            by_sport.setdefault(b["sport_key"], []).append(b)
+    done = 0
+    for sport, bets in by_sport.items():
+        games = {b["event_id"]: {"id": b["event_id"], "home_team": b.get("home_team") or "",
+                                 "away_team": b.get("away_team") or "", "commence_time": b["start"]} for b in bets}
+        events = []
+        for day in sorted({rundown.local_day(b["start"]) for b in bets}):
+            try:
+                events += rundown.fetch_day(RUNDOWN_KEY, sport, bets[0].get("sport") or sport, day)
+            except rundown.RundownError:
+                continue
+        rundown.match_ids(events, list(games.values()))
+        rows = [r for ev in events if ev["id"] in games for r in analyze_event(ev, "fanduel", 1)]
+        done += TRACK.record_closes(rows, now)
+    return done
+
+
+def closing_scans():
+    """Background: every 5 minutes, record closing prices for games about to start."""
+    while True:
+        try:
+            closing_scan_once()
+        except Exception as e:  # never let a hiccup stop the loop
+            print(f"Closing-price check skipped: {e}")
+        time.sleep(300)
+
+
 def run_scan(target, sports, include_props, min_books, source="odds_api"):
     now = datetime.now(timezone.utc)
     rows, errors = [], []
@@ -1162,6 +1197,8 @@ def main():
         if not BACKUP.enabled:
             print("Backups are off: iCloud Drive wasn't found. Set \"backup_folder\" in config.json to choose a folder.")
     stats.warm_up()   # start downloading past results in the background
+    if RUNDOWN_KEY and not DEMO:
+        threading.Thread(target=closing_scans, daemon=True).start()   # free closing prices for CLV
     if DEMO and not args.demo:
         print("No API key found (ODDS_API_KEY or config.json), so running with DEMO data.")
     try:

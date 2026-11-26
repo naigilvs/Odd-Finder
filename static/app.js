@@ -1269,6 +1269,10 @@ function renderBot(s) {
   const rate = b => b.win_rate != null ? pct(b.win_rate, 0) : '–';
   const card = (big, cls, text) => `<div><b class="${cls || ''}">${big}</b>${text}</div>`;
   const a = s.all, v = s.value, g = s.agree;
+  // Is a profit or loss more than luck? The likely range (about 95%) of $100-a-bet results.
+  const luck = b => b.profit_lo == null ? '' : b.profit_lo > 0 ? '. Looks like more than luck'
+    : b.profit_hi < 0 ? '. Losing by more than luck'
+    : `. Too early to tell: likely range ${signedDollars(Math.round(b.profit_lo))} to ${signedDollars(Math.round(b.profit_hi))}`;
   const what = { side: "of the bot's sides", value: 'good-value bets', all: 'sides' }[s.view];
   $('#bViewNote').innerHTML = {
     side: "Counting only <b>the bot's side</b> of each bet: the side with the better value, the one ranked higher in Find bets. The other side is logged too, but left out here.",
@@ -1279,11 +1283,11 @@ function renderBot(s) {
     card(s.tracked, '', `${what} tracked, ${s.pending} waiting for a result`),
     card(rate(a), '', a.expected != null ? `of finished bets won (${rec(a)}); the bot expected ${pct(a.expected, 0)}` : 'win rate, once games finish'),
     card(v.bets ? signedDollars(v.profit) : '–', tone(v.profit),
-      v.bets ? `betting $100 on each good-value bet (${rec(v)}, ${signed(v.roi, 1)} return)` : 'on good-value bets, once games finish'),
+      v.bets ? `betting $100 on each good-value bet (${rec(v)}, ${signed(v.roi, 1)} return)${luck(v)}` : 'on good-value bets, once games finish'),
     card(g.bets ? signedDollars(g.profit) : '–', tone(g.profit),
       g.bets ? `on "market + stats agree" bets (${rec(g)})` : 'on bets where market and stats agree'),
     card(a.bets ? signedDollars(a.profit) : '–', tone(a.profit),
-      a.bets ? 'betting $100 on every bet, good value or not' : 'on every bet, for comparison'),
+      a.bets ? `betting $100 on every one of these, good value or not${luck(a)}` : 'on every bet, for comparison'),
   ].join('') : '';
 
   const table = (title, note, rows, first) => rows.length ? `
@@ -1299,7 +1303,17 @@ function renderBot(s) {
       ${s.side_check.map(r => `<tr><td>${esc(r.name)}</td><td class="n">${r.bets}</td><td class="n">${pct(r.rate, 0)}</td>
         <td class="n ${tone(r.profit)}">${signedDollars(r.profit)}</td></tr>`).join('')}
       </table></section>` : '';
-  $('#bTables').innerHTML = sides +
+  const clvRows = (s.clv || []).filter(r => r.bets);
+  const clvVerdict = r => r.lo == null ? 'too few to tell' : r.lo > 0 ? 'beating the close' : r.hi < 0 ? 'losing to the close' : 'too early to tell';
+  const clv = `
+    <section class="bcard"><h3>Beat the closing price?</h3>
+      <p>The price when the bot first saw a bet, measured against the market's fair price just before the start. Beating the close is the best early sign of real value: it shows in a few hundred bets, where wins and losses take thousands. Closing prices come from free TheRundown checks in the last 15 minutes before moneylines, spreads and totals start (while the bot is running), or your own scans in the last hour.</p>
+      ${clvRows.length ? `<table><tr><th>Which bets</th><th class="n">Bets</th><th class="n">Beat close</th><th class="n">Average</th><th class="n">So far</th></tr>
+      ${clvRows.map(r => `<tr><td>${esc(r.name)}</td><td class="n">${r.bets}</td><td class="n">${pct(r.beat / r.bets, 0)}</td>
+        <td class="n ${tone(r.avg)}">${signed(r.avg, 1)}</td><td class="n">${clvVerdict(r)}${r.lo != null ? `<br><small class="muted">${signed(r.lo, 1)} to ${signed(r.hi, 1)}</small>` : ''}</td></tr>`).join('')}
+      </table>` : '<p class="muted">No closing prices yet. They build up from bets logged since starting prices began being saved, as their games start.</p>'}
+    </section>`;
+  $('#bTables').innerHTML = clv + sides +
     table('When the bot said…', 'If its chances are right, each row wins about as often as expected. Give it a few hundred bets before reading much into it.', s.calibration, 'Chance of success') +
     table('By confidence', 'High confidence should be the most reliable.', s.by_confidence, 'Confidence') +
     table('By league', '', s.by_league, 'League') +

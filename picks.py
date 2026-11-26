@@ -282,10 +282,13 @@ class TrackStore(PickStore):
                     continue
                 bet["agree"] = raw.get("agree") is True
                 old = index.get(_key(bet))
+                near_start = (starts - now).total_seconds() <= CLOSE_WINDOW
                 if old:
                     if old["status"] == "pending":
                         old.update(bet)
                         old["last_seen"] = now.isoformat()
+                        if near_start:
+                            _set_close(old, bet["fair_prob"], bet["decimal"], now, "scan")
                         updated += 1
                     continue
                 bet.update({"id": uuid.uuid4().hex[:12], "first_seen": now.isoformat(), "last_seen": now.isoformat(),
@@ -293,6 +296,8 @@ class TrackStore(PickStore):
                 # The price when first seen: later scans update the current price, so the two
                 # show how the line moved (and, near the start, how the closing price compares).
                 bet.update({f"open_{k}": bet[k] for k in ("american", "decimal", "fair_prob", "point") if k in bet})
+                if near_start and "fair_prob" in bet:
+                    _set_close(bet, bet["fair_prob"], bet["decimal"], now, "scan")
                 self.picks.append(bet)
                 index[_key(bet)] = bet
                 added += 1
@@ -300,10 +305,96 @@ class TrackStore(PickStore):
                 self._write()
         return added, updated
 
+    def record_closes(self, rows, now=None):
+        """Closing prices from a scan just before the start: each row is a valued bet
+        ({event_id, market, selection, fair_prob, decimal}). Returns how many bets got one."""
+        now = now or datetime.now(timezone.utc)
+        done = 0
+        with self.lock:
+            index = {_key(b): b for b in self.picks if b["status"] == "pending"}
+            for r in rows:
+                b = index.get((r.get("event_id"), r.get("market"), r.get("selection")))
+                if not b or r.get("fair_prob") is None:
+                    continue
+                if datetime.fromisoformat(b["start"].replace("Z", "+00:00")) <= now:
+                    continue                                   # already started: too late
+                _set_close(b, r["fair_prob"], r.get("decimal"), now, "closing scan")
+                done += 1
+            if done:
+                self._write()
+        return done
+
+    def due_for_close(self, now=None, window=None):
+        """Pending main-line bets whose game starts within `window` seconds (default: the
+        closing-scan window)."""
+        now = now or datetime.now(timezone.utc)
+        window = window or CLOSING_SCAN_MINUTES * 60
+        with self.lock:
+            out = []
+            for b in self.picks:
+                if b["status"] != "pending" or b["market"] not in ("h2h", "spreads", "totals"):
+                    continue
+                left = (datetime.fromisoformat(b["start"].replace("Z", "+00:00")) - now).total_seconds()
+                if 0 < left <= window:
+                    out.append(dict(b))
+            return out
+
     def clear(self):
         with self.lock:
             self.picks = []
             self._write()
+
+
+# Closing line value (CLV): did the price when the bot first saw a bet beat the market's
+# final fair price just before the start? Bettors who beat the close usually profit in the
+# long run, and CLV shows it in hundreds of bets, where win/loss takes thousands.
+CLOSE_WINDOW = 60 * 60              # a scan this close to the start counts as the closing price
+CLOSING_SCAN_MINUTES = 15           # free closing scans look at games starting this soon
+MIN_LEAD = 60 * 60                  # first seen at least this long before the close, or no CLV
+
+
+def _set_close(b, fair, decimal, now, source):
+    b.update(close_fair=round(float(fair), 4), close_at=now.isoformat(), close_source=source)
+    if decimal:
+        b["close_decimal"] = float(decimal)
+
+
+def clv(b):
+    """The first price's value measured with the closing fair chance: +0.03 means the bet was
+    priced 3% better than the market finally said it was worth. None without both prices."""
+    if b.get("close_fair") is None or not b.get("open_decimal") or not b.get("first_seen") or not b.get("close_at"):
+        return None
+    first = datetime.fromisoformat(b["first_seen"].replace("Z", "+00:00"))
+    close = datetime.fromisoformat(b["close_at"].replace("Z", "+00:00"))
+    if (close - first).total_seconds() < MIN_LEAD:
+        return None                     # first seen right before the close: nothing to measure
+    return b["open_decimal"] * b["close_fair"] - 1
+
+
+def first_value(b):
+    """Value when the bot first saw the bet (its first price and the market then)."""
+    if b.get("open_decimal") and b.get("open_fair_prob") is not None:
+        return b["open_decimal"] * b["open_fair_prob"] - 1
+    return b.get("ev", 0)
+
+
+def _range(values, z=1.96):
+    """Likely range (about 95%) for the average of `values`, or None with fewer than 2."""
+    n = len(values)
+    if n < 2:
+        return None
+    mean = sum(values) / n
+    sd = (sum((v - mean) ** 2 for v in values) / (n - 1)) ** 0.5
+    half = z * sd / n ** 0.5
+    return mean - half, mean + half
+
+
+def _clv_block(bets, name):
+    values = [c for c in (clv(b) for b in bets) if c is not None]
+    r = _range(values)
+    return {"name": name, "bets": len(values), "beat": sum(1 for v in values if v > 0),
+            "avg": sum(values) / len(values) if values else None,
+            "lo": r[0] if r else None, "hi": r[1] if r else None}
 
 
 CHANCE_BUCKETS = [(0, 0.3), (0.3, 0.4), (0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 1.01)]
@@ -314,8 +405,11 @@ def _block(bets):
     decided = [b for b in bets if b["status"] != "push"]
     wins = sum(1 for b in decided if b["status"] == "won")
     expected = sum(b.get("chance", b.get("fair_prob", 0)) for b in decided)
-    profit = sum(100 * (b["decimal"] - 1) if b["status"] == "won" else -100 if b["status"] == "lost" else 0 for b in bets)
+    each = [100 * (b["decimal"] - 1) if b["status"] == "won" else -100 if b["status"] == "lost" else 0 for b in bets]
+    profit = sum(each)
+    r = _range(each)                     # likely range of the total: n x the average's range
     return {"bets": len(bets), "wins": wins, "losses": len(decided) - wins, "pushes": len(bets) - len(decided),
+            "profit_lo": round(r[0] * len(each), 2) if r else None, "profit_hi": round(r[1] * len(each), 2) if r else None,
             "win_rate": wins / len(decided) if decided else None,
             "expected": expected / len(decided) if decided else None,
             "profit": round(profit, 2), "roi": profit / (100 * len(bets)) if bets else None}
@@ -400,6 +494,9 @@ def track_summary(bets, since=None, view="side"):
     recent = sorted(done, key=lambda b: b["start"], reverse=True)[:60]
     return {
         "view": view if view in ("side", "value") else "all", "side_check": check,
+        "clv": [b for b in (_clv_block([b for b in sel if first_value(b) > 0], "Good value when first seen"),
+                            _clv_block(sel, {"side": "The bot's side of each bet", "value": "Good-value bets",
+                                             "all": "Every side logged"}.get(view, "Every side logged")))],
         "tracked": len(sel), "pending": len(sel) - len(done), "settled": len(done),
         "all": _block(done),
         "value": _block([b for b in done if b.get("ev", 0) > 0]),
