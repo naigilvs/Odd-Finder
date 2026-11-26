@@ -34,6 +34,7 @@ import backup
 import injuries
 import picks
 import props_stats
+import rundown
 import scans
 import wagers
 import stats
@@ -160,6 +161,7 @@ SPORTSDB_GAP_SECONDS = 2.5
 
 DEMO = False
 API_KEY = None
+RUNDOWN_KEY = None     # TheRundown's free key (config.json "therundown_key"): main lines without credits
 _cache = {}
 _cache_lock = threading.Lock()
 _quota = {"remaining": None, "used": None}
@@ -280,20 +282,50 @@ def fetch_events(sport, target, include_props):
         f"/sports/{sport}/odds", bookmakers=books,
         markets=",".join(FEATURED_MARKETS), oddsFormat="decimal",
     )
+    if include_props:
+        add_props(sport, target, events)
+    return events
+
+
+def add_props(sport, target, events):
+    """Player props for the next 48 hours' games, from The Odds API (these cost credits)."""
     props = PROP_MARKETS.get(sport)
-    if include_props and props:
-        soon = datetime.now(timezone.utc) + timedelta(hours=48)
-        upcoming = [e for e in events if parse_time(e["commence_time"]) < soon][:PROP_EVENTS_PER_SPORT]
-        by_id = {e["id"]: e for e in events}
-        for ev in upcoming:
-            try:
-                extra = api_get(
-                    f"/sports/{sport}/events/{ev['id']}/odds", bookmakers=books,
-                    markets=",".join(props), oddsFormat="decimal",
-                )
-            except ApiError:
-                continue
-            merge_bookmakers(by_id[ev["id"]], extra.get("bookmakers", []))
+    if not props:
+        return
+    books = books_param(target)
+    soon = datetime.now(timezone.utc) + timedelta(hours=48)
+    upcoming = [e for e in events if parse_time(e["commence_time"]) < soon
+                and not e["id"].startswith("rd_")][:PROP_EVENTS_PER_SPORT]   # rd_: not on The Odds API's list
+    for ev in upcoming:
+        try:
+            extra = api_get(
+                f"/sports/{sport}/events/{ev['id']}/odds", bookmakers=books,
+                markets=",".join(props), oddsFormat="decimal",
+            )
+        except ApiError:
+            continue
+        merge_bookmakers(ev, extra.get("bookmakers", []))
+
+
+def sport_title(sport):
+    try:
+        return next((s["title"] for s in list_sports() if s["key"] == sport), sport)   # free call, cached
+    except ApiError:
+        return stats.LEAGUES.get(sport, {}).get("name", sport)
+
+
+def fetch_events_free(sport, target, include_props):
+    """Main lines from TheRundown's free plan (no credits), matched to The Odds API's game list
+    (also free) so ids and names stay the same. Props, if asked for, still come from The Odds API."""
+    events = rundown.fetch_events(RUNDOWN_KEY, sport, sport_title(sport))
+    if events is None:
+        raise ApiError("not on TheRundown's free plan. Choose The Odds API above to scan it")
+    try:
+        rundown.match_ids(events, api_get(f"/sports/{sport}/events"))
+    except ApiError:
+        pass                                   # no match list: games keep TheRundown's ids
+    if include_props:
+        add_props(sport, target, events)
     return events
 
 
@@ -616,14 +648,15 @@ def analyze_event(event, target, min_books):
     return rows
 
 
-def run_scan(target, sports, include_props, min_books):
+def run_scan(target, sports, include_props, min_books, source="odds_api"):
     now = datetime.now(timezone.utc)
     rows, errors = [], []
+    free = source == "therundown" and RUNDOWN_KEY and not DEMO
 
     def one(sport):
         try:
-            return fetch_events(sport, target, include_props), None
-        except ApiError as e:
+            return (fetch_events_free if free else fetch_events)(sport, target, include_props), None
+        except (ApiError, rundown.RundownError) as e:
             return [], f"{sport}: {e}"
 
     with ThreadPoolExecutor(max_workers=6) as pool:
@@ -638,6 +671,7 @@ def run_scan(target, sports, include_props, min_books):
     return {
         "book": TARGET_BOOKS[target], "demo": DEMO, "generated": now.isoformat(),
         "count": len(rows), "rows": rows, "errors": errors, "quota": _quota,
+        "source": "therundown" if free else "odds_api", "rundown_usage": rundown.usage,
     }
 
 
@@ -739,7 +773,7 @@ def demo_events(sport, target, include_props):
     return events
 
 
-CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py", ROOT / "props_stats.py", ROOT / "wagers.py", ROOT / "injuries.py"]
+CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py", ROOT / "props_stats.py", ROOT / "wagers.py", ROOT / "injuries.py", ROOT / "rundown.py"]
 _started_with = {f: f.stat().st_mtime for f in CODE_FILES if f.exists()}
 
 
@@ -1038,7 +1072,9 @@ class Handler(BaseHTTPRequestHandler):
                                 "outdated": code_changed_since_start(),
                                 "backup": BACKUP.status() if BACKUP else {"enabled": False, "demo": DEMO},
                                 "github_backup": GITBACKUP.status() if GITBACKUP else {"enabled": False},
-                                "prop_sports": list(PROP_MARKETS)})
+                                "prop_sports": list(PROP_MARKETS),
+                                "rundown": bool(RUNDOWN_KEY) and not DEMO, "rundown_usage": rundown.usage,
+                                "rundown_sports": list(rundown.SPORT_IDS)})
             elif url.path == "/api/accuracy":
                 self.send_json(stats.accuracy())
             elif url.path == "/api/sports":
@@ -1052,7 +1088,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": "Pick at least one sport."}, 400)
                 props = q.get("props", ["0"])[0] == "1"
                 min_books = max(1, int(q.get("min_books", ["2"])[0]))
-                result = run_scan(target, sports, props, min_books)
+                source = q.get("source", ["odds_api"])[0]
+                result = run_scan(target, sports, props, min_books, source)
                 SCANS.save_main(target, sports, result["rows"])
                 self.send_json(result)
             elif url.path == "/api/saved-scans":
@@ -1087,12 +1124,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global DEMO, API_KEY, IMAGES, PICKS, TRACK, BACKUP, GITBACKUP, SCANS, WAGERS
+    global DEMO, API_KEY, RUNDOWN_KEY, IMAGES, PICKS, TRACK, BACKUP, GITBACKUP, SCANS, WAGERS
     ap = argparse.ArgumentParser(description="Betting value finder")
     ap.add_argument("--demo", action="store_true", help="use made-up sample data")
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args()
     API_KEY = load_api_key()
+    RUNDOWN_KEY = (os.environ.get("THERUNDOWN_KEY") or load_config().get("therundown_key") or "").strip() or None
     DEMO = args.demo or not API_KEY
     IMAGES = ImageFinder()
     if DEMO:   # keep made-up demo picks and results apart from real ones

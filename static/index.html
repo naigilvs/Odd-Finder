@@ -69,6 +69,11 @@
     <div class="scanbar">
       <div class="leagues" id="leagues" aria-label="Leagues to scan"></div>
       <div class="scan-actions">
+        <label class="toggle source" id="sourceWrap" hidden>Odds from
+          <select id="source" title="Where main-line odds come from">
+            <option value="therundown">TheRundown (free)</option>
+            <option value="odds_api">The Odds API (uses credits)</option>
+          </select></label>
         <label class="toggle"><input type="checkbox" id="props"> Player props</label>
         <div class="scan-col">
           <button class="btn-scan" id="scan">Scan odds</button>

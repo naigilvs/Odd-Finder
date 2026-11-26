@@ -30,6 +30,12 @@ To try it without a key, run `python3 app.py --demo`. It uses made-up teams and 
 - Player props cost up to about 4 credits per game, for at most 8 games per sport per scan.
 - The number of credits left is shown next to the Scan button.
 
+## Free main lines from TheRundown (no credits)
+
+With a free TheRundown key in `config.json` (`"therundown_key": "..."`; sign up at therundown.io), an **Odds from** menu appears next to Scan. **TheRundown (free)** loads full-game moneylines, spreads and totals without using any Odds API credits: its free plan allows 20,000 "data points" a day (about 20 per game; the number left shows under the Scan button) and resets at midnight UTC. Each game is matched to The Odds API's game list (a free call), so ids, team names, logos, saved picks and the results tracker stay the same whichever source you use.
+
+Limits of the free plan: FanDuel is compared with only **DraftKings and BetMGM** (no Pinnacle), odds can be up to 5 minutes old, and there are no player props or alternate lines. So value and confidence are rougher than with The Odds API, and the **Books needed** filter drops to 2 when the free source is chosen. FanDuel's lines sometimes appear on TheRundown only close to game day. If **Player props** is ticked, props still come from The Odds API and use credits; **More bets** always uses The Odds API. Leagues TheRundown doesn't cover for free (e.g. tennis) say so in the scan message. Choose **The Odds API (uses credits)** for the sharper comparison.
+
 ## Adding another sportsbook later
 
 Add it to `TARGET_BOOKS` in `app.py`, using The Odds API's bookmaker key, for example `"draftkings": "DraftKings"`.
@@ -103,6 +109,7 @@ Results are saved in your browser until the games start. Alternate lines and tea
 - `app.py`: the server: downloads odds, values every bet, and serves the page.
 - `stats.py`: the stats second opinion from past results.
 - `injuries.py`: ESPN's injury report for the NBA, NHL and NFL.
+- `rundown.py`: free main-line odds from TheRundown.
 - `static/index.html`, `static/app.css`, `static/app.js`: the page's layout, styling and behavior.
 - `static/calc.js`: the page's calculations (chance of success, confidence, best line per bet).
 - `tests/`: automated tests.

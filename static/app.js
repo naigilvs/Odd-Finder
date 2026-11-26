@@ -123,9 +123,16 @@ function renderLeagues() {
 
 function scanTargets() { return leaguesInTab().map(s => s.key).filter(k => state.picked.has(k)); }
 
+// Main lines from TheRundown's free plan (no credits) when it's set up and chosen.
+const freeSource = () => !!(state.cfg && state.cfg.rundown && $('#source').value === 'therundown');
+
 function renderScanButton() {
   const n = scanTargets().length;
-  const cost = state.cfg.demo ? '' : `<small>about ${n * CREDITS_PER_LEAGUE}${$('#props').checked ? '+' : ''} credits</small>`;
+  const props = $('#props').checked;
+  const notFree = freeSource() ? scanTargets().filter(k => !state.cfg.rundown_sports.includes(k)).length : 0;
+  const cost = state.cfg.demo ? ''
+    : freeSource() ? `<small>main lines free${props ? ', props use credits' : ''}${notFree ? `; ${notFree} not on the free plan` : ''}</small>`
+    : `<small>about ${n * CREDITS_PER_LEAGUE}${props ? '+' : ''} credits</small>`;
   $('#scan').innerHTML = n ? `Scan ${n} league${n > 1 ? 's' : ''}${cost}` : 'Pick a league';
   $('#scan').disabled = !n;
 }
@@ -135,17 +142,19 @@ async function scan() {
   const sports = scanTargets();
   if (!sports.length) return;
   $('#scan').disabled = true;
-  setStatus(`Checking ${state.book.name}'s odds against the market…`);
+  setStatus(freeSource() ? `Loading TheRundown's free odds (a few seconds per league)…`
+    : `Checking ${state.book.name}'s odds against the market…`);
   try {
     const p = new URLSearchParams({ book: state.book.key, sports: sports.join(','),
-      props: $('#props').checked ? 1 : 0, min_books: 1 });
+      props: $('#props').checked ? 1 : 0, min_books: 1, source: freeSource() ? 'therundown' : 'odds_api' });
     const res = await getJSON('/api/scan?' + p);
     const at = Date.now();
     STATS.known = {};            // fresh odds: ask for fresh stats too
     clearTimeout(STATS.timer); STATS.timer = null;
     sports.forEach(k => state.results[k] = { rows: [], at });
     res.rows.forEach(r => (state.results[r.sport_key] ||= { rows: [], at }).rows.push(r));
-    showCredits(res.quota);
+    state.source = res.source;
+    showCredits(res.quota, res.rundown_usage);
     renderAll(true);
     if (res.errors.length) setStatus(`Some leagues couldn't be loaded: ${res.errors.join('; ')}`, true);
   } catch (e) {
@@ -156,7 +165,9 @@ async function scan() {
 }
 
 function setStatus(msg, err) { $('#status').textContent = msg; $('#status').className = 'status' + (err ? ' err' : ''); }
-function showCredits(q) {
+function showCredits(q, rd) {
+  if (rd) state.rundownUsage = rd;
+  rd = state.rundownUsage;
   document.querySelectorAll('.credit-line').forEach(el => {
     if (state.cfg && state.cfg.demo) {
       el.textContent = 'Demo mode uses no credits';
@@ -166,6 +177,13 @@ function showCredits(q) {
       el.classList.toggle('low', left < 50);
     } else if (!el.innerHTML) {
       el.textContent = 'Credits left will show after a scan';
+    }
+    el.querySelector('.rd-line')?.remove();
+    if (state.cfg && state.cfg.rundown && rd && rd.remaining != null) {
+      const span = document.createElement('span');
+      span.className = 'rd-line';
+      span.innerHTML = `<b>${rd.remaining.toLocaleString()}</b> of ${(rd.limit || 20000).toLocaleString()} free odds points left today`;
+      el.appendChild(span);
     }
   });
 }
@@ -214,7 +232,8 @@ function renderResults(fresh) {
   const latest = Math.max(0, ...scannedHere.map(k => state.results[k].at));
   if (latest && !$('#status').classList.contains('err')) {
     const pos = all.filter(r => r.ev > 0).length;
-    setStatus(`${all.length} bets checked, ${pos} with positive value. Updated ${ago(latest)}.`);
+    setStatus(`${all.length} bets checked, ${pos} with positive value. Updated ${ago(latest)}.` +
+      (state.source === 'therundown' ? ` Odds from TheRundown's free plan: FanDuel compared with DraftKings and BetMGM only, up to 5 minutes old, so value and confidence are rougher than with The Odds API.` : ''));
   }
   const hidden = Object.keys(state.results).filter(k => (state.tab === 'all' || state.groupOf[k] === state.tab)
     && !state.picked.has(k) && state.results[k].rows.length).length;
@@ -524,6 +543,12 @@ function renderAll(fresh) {
 /* ---------------- boot ---------------- */
 async function init() {
   state.cfg = await getJSON('/api/config');
+  if (state.cfg.rundown) {
+    $('#sourceWrap').hidden = false;
+    $('#source').value = localStorage.getItem('oddfinder.source') || 'therundown';
+    if (freeSource()) $('#minBooks').value = 2;      // only 2 other books on the free plan
+    state.rundownUsage = state.cfg.rundown_usage;
+  }
   await loadPicks();
   wagersApi({ action: 'list' }).catch(() => {});      // bankroll for suggested stakes
   showCredits(state.cfg.quota);
@@ -545,6 +570,12 @@ async function init() {
 
 $('#scan').onclick = () => { setStatus(''); scan(); };
 $('#props').onchange = renderScanButton;
+$('#source').onchange = () => {
+  localStorage.setItem('oddfinder.source', $('#source').value);
+  $('#minBooks').value = freeSource() ? 2 : 3;         // the free plan has only 2 other books
+  renderScanButton();
+  if (Object.keys(state.results).length) renderResults();
+};
 $('#changeBook').onclick = showStart;
 $('#home').onclick = e => { e.preventDefault(); showPage('find'); state.tab = 'all'; renderAll(); };
 ['#fMarket', '#fProb', '#fEv', '#sort', '#minBooks'].forEach(s => $(s).addEventListener('input', () => renderResults()));

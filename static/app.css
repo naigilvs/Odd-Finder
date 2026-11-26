@@ -505,3 +505,5 @@
   .nopicks { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--amber); border-radius: 10px;
              padding: 14px 18px; margin: 0 0 14px; color: var(--slate); font-size: 14px; line-height: 1.5; }
   .nopicks b { color: var(--chalk); display: block; font: 700 18px var(--display); margin-bottom: 2px; }
+  .toggle.source select { background: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; color: var(--chalk); font: inherit; }
+  .credit-line .rd-line { display: block; margin-top: 2px; }
