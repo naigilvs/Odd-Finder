@@ -956,11 +956,13 @@ class Handler(BaseHTTPRequestHandler):
                 WAGERS.update(str(body.get("id")), body.get("wager"))
             elif action == "delete":
                 WAGERS.delete(str(body.get("id")))
+            elif action == "bankroll":
+                WAGERS.set_bankroll(body.get("bankroll"))
             elif action != "list":
                 return self.send_json({"error": "Unknown action"}, 400)
             if action != "list":
                 backup_soon()
-            self.send_json({"wagers": WAGERS.all()})
+            self.send_json({"wagers": WAGERS.all(), "bankroll": WAGERS.bankroll})
         except (KeyError, ValueError) as e:
             self.send_json({"error": str(e).strip("'\"")}, 400)
 

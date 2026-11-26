@@ -80,6 +80,7 @@
 
     <section id="results">
       <div class="toppick" id="toppick" role="button" tabindex="0" aria-label="Show details for the best value bet" hidden></div>
+      <div class="nopicks" id="noPicks" role="status" hidden></div>
 
       <div class="filters" id="filters" hidden>
         <label>Bet type<select id="fMarket"></select></label>
@@ -200,6 +201,7 @@
     <div id="wagersView" hidden>
       <h2 class="page-title">My wagers</h2>
       <p class="more-intro">Log the bets you actually placed: how much you wagered and how much you won or lost. Not settled yet? Choose Pending and set the result later. Every wager can be edited. Saved on your computer and backed up with your picks.</p>
+      <section class="bankroll" id="bankroll" aria-label="Bankroll"></section>
       <form class="wform" id="wForm" novalidate>
         <div id="wRows"></div>
         <div class="wbuttons">

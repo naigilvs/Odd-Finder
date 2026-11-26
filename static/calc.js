@@ -179,8 +179,60 @@
     return s;
   }
 
+  // ---- bankroll
+  // Balance: the starting bankroll plus the net of every settled wager.
+  function balance(settings, list) {
+    return Math.round((settings.start + list.reduce((a, w) => a + wagerNet(w), 0)) * 100) / 100;
+  }
+  // Balance after each day with settled wagers, oldest first.
+  function balanceHistory(settings, list) {
+    const byDay = new Map();
+    for (const w of list) if (w.result !== 'pending') byDay.set(w.date, (byDay.get(w.date) || 0) + wagerNet(w));
+    let b = settings.start;
+    return [...byDay.keys()].sort().map(date => {
+      b += byDay.get(date);
+      return { date, balance: Math.round(b * 100) / 100 };
+    });
+  }
+  // Kelly: the share of the bankroll that grows it fastest if `chanceOf` is exactly right:
+  // (chance x decimal - 1) / (decimal - 1). Chances are estimates, so we use a fraction of it
+  // (quarter Kelly by default), half that again for low-confidence bets, and never more than
+  // the cap. No edge -> $0.
+  function kellyStake(chanceOf, decimal, bankroll, settings, level) {
+    const full = decimal > 1 ? (chanceOf * decimal - 1) / (decimal - 1) : 0;
+    if (!(full > 0) || !(bankroll > 0)) return { stake: 0, full: Math.max(full, 0), share: 0, capped: false };
+    const raw = full * settings.kelly * (level === 'low' ? 0.5 : 1);
+    const share = Math.min(raw, settings.cap_pct / 100);
+    const amount = bankroll * share;
+    const stake = amount >= 10 ? Math.round(amount) : Math.round(amount * 100) / 100;
+    return { stake, full, share, capped: raw > share };
+  }
+  // Warnings for new wagers (they never block): above the maximum stake, at the daily loss
+  // limit, or too much waiting on pending bets. `existing` excludes a wager being edited.
+  function bankrollWarnings(fresh, existing, settings, today) {
+    const out = [];
+    const r2 = x => Math.round(x * 100) / 100;
+    const bal = balance(settings, existing);
+    if (settings.max_stake > 0) {
+      const big = fresh.filter(w => w.wagered > settings.max_stake);
+      if (big.length) out.push(`${big.length > 1 ? `${big.length} of these wagers are` : 'This wager is'} above your $${settings.max_stake} maximum stake.`);
+    }
+    if (settings.daily_loss > 0 && fresh.some(w => w.date === today)) {
+      const day = existing.concat(fresh).filter(w => w.date === today && w.result !== 'pending')
+        .reduce((a, w) => a + wagerNet(w), 0);
+      if (-day >= settings.daily_loss) out.push(`You're down $${r2(-day)} today, at or past your $${settings.daily_loss} daily loss limit.`);
+    }
+    if (settings.exposure_pct > 0 && settings.start > 0 && fresh.some(w => w.result === 'pending')) {
+      const pending = existing.concat(fresh).filter(w => w.result === 'pending').reduce((a, w) => a + w.wagered, 0);
+      const limit = Math.max(bal, 0) * settings.exposure_pct / 100;
+      if (pending > limit) out.push(`You'd have $${r2(pending)} waiting on pending bets, more than ${settings.exposure_pct}% of your $${bal} bankroll.`);
+    }
+    return out;
+  }
+
   const api = { MARKET_WEIGHT, chance, agrees, confidence, CONF_RANK, betLabel, americanOdds, lineGroup, bestLines,
-                pickProfit, summarize, winFromOdds, parlayDecimal, parlayResult, wagerNet, wagerSummary };
+                pickProfit, summarize, winFromOdds, parlayDecimal, parlayResult, wagerNet, wagerSummary,
+                balance, balanceHistory, kellyStake, bankrollWarnings };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Calc = api;
 })(this);

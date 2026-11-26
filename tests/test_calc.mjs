@@ -157,3 +157,33 @@ test('injury news lowers confidence', () => {
   assert.match(out.why, /listed out on the injury report/);
   assert.equal(Calc.confidence(bet(), { prob: 0.56 }, {}).level, 'high');   // not on the report
 });
+
+test('bankroll: balance, history and suggested stakes', () => {
+  const S = { start: 500, unit_pct: 1, kelly: 0.25, cap_pct: 2, max_stake: 0, daily_loss: 0, exposure_pct: 10 };
+  const w = (date, result, wagered, won = 0) => ({ date, result, wagered, won });
+  const list = [w('2026-11-02', 'lost', 20), w('2026-11-01', 'won', 50, 45), w('2026-11-02', 'won', 10, 9), w('2026-11-03', 'pending', 30)];
+  assert.equal(Calc.balance(S, list), 534);
+  assert.deepEqual(Calc.balanceHistory(S, list), [{ date: '2026-11-01', balance: 545 }, { date: '2026-11-02', balance: 534 }]);
+  // 55% at -110: full Kelly ~5.5%, quarter ~1.4% -> about $7 on $500
+  const k = Calc.kellyStake(0.55, 1.909, 500, S, 'medium');
+  assert.equal(k.stake, 6.87);
+  assert.ok(Math.abs(k.full - 0.055) < 0.001);
+  assert.equal(Calc.kellyStake(0.55, 1.909, 500, S, 'low').stake, 3.43);     // halved for low confidence
+  assert.equal(Calc.kellyStake(0.5, 1.909, 500, S).stake, 0);                // no edge, no bet
+  const big = Calc.kellyStake(0.7, 2.0, 500, S);
+  assert.deepEqual([big.stake, big.capped], [10, true]);                      // capped at 2%
+  assert.equal(Calc.kellyStake(0.6, 2.0, 0, S).stake, 0);                    // no bankroll set
+});
+
+test('bankroll: limit warnings', () => {
+  const S = { start: 500, unit_pct: 1, kelly: 0.25, cap_pct: 2, max_stake: 25, daily_loss: 40, exposure_pct: 10 };
+  const w = (result, wagered, date = '2026-11-25') => ({ date, result, wagered, won: result === 'won' ? wagered : 0 });
+  assert.deepEqual(Calc.bankrollWarnings([w('lost', 10)], [], S, '2026-11-25'), []);
+  assert.match(Calc.bankrollWarnings([w('pending', 30)], [], S, '2026-11-25')[0], /above your \$25 maximum/);
+  const day = Calc.bankrollWarnings([w('lost', 15)], [w('lost', 25)], S, '2026-11-25');
+  assert.match(day[0], /down \$40 today/);
+  assert.equal(Calc.bankrollWarnings([w('lost', 15)], [w('lost', 25, '2026-11-24')], S, '2026-11-25').length, 0);  // yesterday doesn't count
+  const exp = Calc.bankrollWarnings([w('pending', 20)], [w('pending', 25), w('pending', 10)], S, '2026-11-25');
+  assert.match(exp[0], /\$55 waiting on pending bets, more than 10% of your \$500/);
+  assert.deepEqual(Calc.bankrollWarnings([w('pending', 100)], [], { ...S, max_stake: 0, exposure_pct: 0 }, '2026-11-25'), []);  // limits off
+});

@@ -85,6 +85,9 @@ For the NBA, NHL and NFL the page checks ESPN's free injury report (refreshed at
 
 The bot results tracker also keeps each bet's **starting price** (the odds when the bot first saw it) next to the latest one, so line movement and closing prices can be measured once a few weeks of data have built up.
 
+## No qualifying picks
+When none of the bets scanned in the current tab has positive value with at least medium confidence, Find bets says **No qualifying picks right now** above the list. The list still shows everything, best value first; sitting out is a fine choice.
+
 ## More bets
 
 The **More bets** switch at the top opens a separate section for alternate lines, team totals, halves/quarters/periods, over/under player props and yes/no props (anytime touchdown, double-double, home run…). Nothing there uses credits until you ask:
@@ -132,6 +135,9 @@ Click the ☆ next to any bet, or **Save pick** in its details (you can add a st
 
 ### My wagers
 A log of the bets you actually placed. For each one, enter the date, an optional note (e.g. "Lakers -3.5"), the amount you wagered, and whether it won (plus how much you won, not counting your stake), lost, pushed, or is still **pending** (set the result later with **Set result**). Every wager can be changed later with **Edit**. For what you bet on, choose a saved pick from **My picks** (it fills in the name, game date, any stake you saved, the result if it's already graded, and the amount won from its odds) or type your own. Pending bets are kept out of your profit and record and shown as money at stake. For a **parlay** (one bet on several legs), click **Make this a parlay**: add 2 to 15 legs with **+ Add leg**, each chosen from My picks or typed in. When every leg comes from My picks, the page shows the combined odds (the legs' odds multiplied, e.g. three -110 legs pay about +596) and works out the amount won; once every leg is graded it fills in the result (any lost leg loses the parlay; a pushed leg drops out of the odds). The parlay counts as one wager, listed with its legs underneath. Use **+ Add another wager** to log several at once (if any row has a mistake, none are saved and the message says which row). The page shows your net profit or loss, total won, total lost, win rate and record, total wagered, return on money wagered, average bet, biggest win, biggest loss, current streak and money at stake on pending bets, for the last 7 days, last 30 days, this month or all time. Entries are saved in `data/wagers.json` and backed up to iCloud Drive and GitHub with your picks.
+
+#### Bankroll
+At the top of My wagers, **Set up bankroll** asks for the money you've set aside for betting. The page then shows your **balance** (that amount plus the net of your settled wagers), your profit in **units** (1 unit = 1% of your start by default), and a chart of your balance after each day with a settled wager. Every bet's pop-up shows a **suggested stake**: quarter Kelly by default (Kelly sizes a bet by its edge: (chance x decimal odds - 1) / (decimal odds - 1)), halved again for low-confidence bets, and never more than 2% of your balance. A bet with no edge gets $0. Optional limits (maximum stake, daily loss limit, and a cap on money waiting on pending bets) show a warning when you add a wager that goes past them; they never stop you. Settings are saved in `data/bankroll.json` and backed up with your wagers. No bet is a sure thing: the suggestions only size bets so a losing streak can't wipe out the bankroll.
 
 ### Bot results
 Every moneyline, spread, total and team total the bot shows for the NFL, NBA, NHL and MLB, and every NBA, NHL and NFL player prop it can check, is logged automatically when you scan (once per bet; a rescan updates it to the latest price) and checked after the game. The page shows:

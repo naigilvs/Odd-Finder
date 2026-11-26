@@ -94,6 +94,40 @@ def _link(data):
     return out
 
 
+# Bankroll settings: what you started with and how carefully to size bets. Every limit is
+# optional (0 = off) and only warns; nothing stops you from logging a wager.
+BANKROLL_DEFAULTS = {
+    "start": 0.0,           # bankroll before the wagers logged here (0 = not set up)
+    "unit_pct": 1.0,        # one unit = this % of the bankroll
+    "kelly": 0.25,          # fraction of Kelly used for suggested stakes (quarter Kelly)
+    "cap_pct": 2.0,         # suggested stakes never above this % of the bankroll
+    "max_stake": 0.0,       # warn when one wager is above this many dollars
+    "daily_loss": 0.0,      # warn when the day's losses reach this many dollars
+    "exposure_pct": 10.0,   # warn when pending bets exceed this % of the bankroll
+}
+BANKROLL_LIMITS = {"start": (0, MAX_AMOUNT), "unit_pct": (0.1, 10), "kelly": (0.05, 1), "cap_pct": (0.1, 25),
+                   "max_stake": (0, MAX_AMOUNT), "daily_loss": (0, MAX_AMOUNT), "exposure_pct": (0, 100)}
+BANKROLL_NAMES = {"start": "starting bankroll", "unit_pct": "unit size", "kelly": "Kelly fraction",
+                  "cap_pct": "stake cap", "max_stake": "maximum stake", "daily_loss": "daily loss limit",
+                  "exposure_pct": "pending limit"}
+
+
+def clean_bankroll(data):
+    if not isinstance(data, dict):
+        raise ValueError("Those bankroll settings are missing.")
+    out = {}
+    for key, default in BANKROLL_DEFAULTS.items():
+        try:
+            x = float(data.get(key, default))
+        except (TypeError, ValueError):
+            raise ValueError(f"Enter a number for the {BANKROLL_NAMES[key]}.")
+        lo, hi = BANKROLL_LIMITS[key]
+        if x != x or not lo <= x <= hi:
+            raise ValueError(f"Enter a {BANKROLL_NAMES[key]} between {lo:g} and {hi:,g}.")
+        out[key] = round(x, 4)
+    return out
+
+
 def net(w):
     return w["won"] if w["result"] == "won" else -w["wagered"] if w["result"] == "lost" else 0.0
 
@@ -102,6 +136,12 @@ class WagerStore:
     def __init__(self, path=WAGERS_FILE):
         self.path = path
         self.lock = threading.Lock()
+        # bankroll settings sit next to the wagers: bankroll.json (bankroll_demo.json in demo mode)
+        self.bankroll_path = path.parent / path.name.replace("wagers", "bankroll")
+        try:
+            self.bankroll = clean_bankroll(json.loads(self.bankroll_path.read_text()))
+        except (OSError, ValueError):
+            self.bankroll = dict(BANKROLL_DEFAULTS)
         try:
             self.wagers = json.loads(self.path.read_text())
             if not isinstance(self.wagers, list):
@@ -159,6 +199,15 @@ class WagerStore:
             old.update(w)
             self._write()
             return old
+
+    def set_bankroll(self, data):
+        settings = clean_bankroll(data)
+        with self.lock:
+            self.bankroll = settings
+            tmp = self.bankroll_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(settings, indent=1))
+            tmp.replace(self.bankroll_path)
+        return settings
 
     def delete(self, wid):
         with self.lock:

@@ -182,6 +182,9 @@ function filtered() {
       : key === 'chance' ? chance(b) - chance(a) : b[key] - a[key]);
 }
 
+// A pick worth considering: positive value and at least medium confidence.
+const qualifies = r => r.ev > 0 && confidence(r).level !== 'low';
+
 function renderResults(fresh) {
   const all = rowsInTab();
   const markets = [...new Set(all.map(r => r.market_label))].sort();
@@ -234,6 +237,18 @@ function renderResults(fresh) {
       $('#fConf').value = ''; $('#fAgree').checked = false;
       renderResults();
     };
+  }
+
+  // No qualifying picks: nothing scanned here beats the fair price with at least medium
+  // confidence. Say so plainly rather than leave a list of negative-value bets looking like picks.
+  const qualifying = all.filter(qualifies);
+  const pos = all.filter(r => r.ev > 0);
+  $('#noPicks').hidden = !all.length || qualifying.length > 0;
+  if (!$('#noPicks').hidden) {
+    $('#noPicks').innerHTML = `<b>No qualifying picks right now.</b> ${pos.length
+      ? `${pos.length} of the ${all.length} bets checked beat the fair price, but only with low confidence (thin markets, injury news or rough estimates).`
+      : `None of the ${all.length} bets checked pay more than their chance of winning is worth.`}
+      The list below still shows them, best value first. Sitting out is a fine choice: scan again later, as prices and news change.`;
   }
 
   const top = list[0];
@@ -510,6 +525,7 @@ function renderAll(fresh) {
 async function init() {
   state.cfg = await getJSON('/api/config');
   await loadPicks();
+  wagersApi({ action: 'list' }).catch(() => {});      // bankroll for suggested stakes
   showCredits(state.cfg.quota);
   try {
     state.sports = await getJSON('/api/sports');
@@ -647,7 +663,8 @@ function betDetails(r) {
       ${savedPick(r)
         ? `<button class="btn-save on" id="bmSave">★ Saved to My picks</button><span class="muted">Click to remove it.</span>`
         : `<button class="btn-save" id="bmSave">☆ Save pick</button>
-           <label>Stake (optional) $<input id="bmStake" type="number" min="0" step="1" placeholder="0"></label>`}
+           <label>Stake (optional) $<input id="bmStake" type="number" min="0" step="1" placeholder="${stakeSuggestion(r).stake || 0}"></label>`}
+      <span class="bm-stake">${stakeSuggestion(r).text}</span>
     </div>
     <div class="bm-verdict ${tone}"><b>${title}.</b>${esc(line)}</div>
     <div class="bm-nums">
@@ -1280,7 +1297,9 @@ function loadLeagues() {
 }
 
 /* ---------------- My wagers ---------------- */
-const WAGERS = { list: [], editing: null };
+const WAGERS = { list: [], editing: null, bankroll: null, settingsOpen: false };
+const BANKROLL_FIELDS = ['start', 'unit_pct', 'kelly', 'cap_pct', 'max_stake', 'daily_loss', 'exposure_pct'];
+const KELLY_WORD = { 0.125: 'eighth Kelly', 0.25: 'quarter Kelly', 0.5: 'half Kelly', 1: 'full Kelly' };
 const todayLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
 const localDay = iso => { const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
 const RESULT_WORD = { won: 'Won', lost: 'Lost', push: 'Push', pending: 'Pending' };
@@ -1290,6 +1309,7 @@ async function wagersApi(body) {
   const j = await r.json().catch(() => ({ error: r.statusText }));
   if (!r.ok || j.error) throw new Error(j.error || r.statusText);
   WAGERS.list = j.wagers || [];
+  if (j.bankroll) WAGERS.bankroll = j.bankroll;
   return j;
 }
 
@@ -1526,6 +1546,150 @@ function startEdit(w) {
   renderWagers();
 }
 
+// ---- bankroll: balance, units, suggested-stake settings, limits and a balance chart
+const bankrollSet = () => !!(WAGERS.bankroll && WAGERS.bankroll.start > 0);
+const unitSize = b => b.start * b.unit_pct / 100;
+
+function renderBankroll() {
+  const b = WAGERS.bankroll, box = $('#bankroll');
+  if (!b) { box.innerHTML = ''; return; }
+  if (WAGERS.settingsOpen) { box.innerHTML = bankrollForm(b); return; }
+  if (!bankrollSet()) {
+    box.innerHTML = `<div class="br-setup"><div><b>Set up your bankroll</b><span>Enter the money you've set aside for betting to see your balance, profit in units,
+      a suggested stake on every pick, and warnings when a wager goes past your limits.</span></div>
+      <button class="btn-scan" type="button" data-br="open">Set up bankroll</button></div>`;
+    return;
+  }
+  const bal = Calc.balance(b, WAGERS.list), unit = unitSize(b), net = bal - b.start;
+  const tone = net > 0 ? 'up' : net < 0 ? 'down' : '';
+  const limits = [b.max_stake > 0 && `max stake ${dollars(b.max_stake)}`, b.daily_loss > 0 && `daily loss limit ${dollars(b.daily_loss)}`,
+    b.exposure_pct > 0 && `pending bets up to ${b.exposure_pct}% of bankroll`].filter(Boolean);
+  box.innerHTML = `
+    <div class="br-top">
+      <div class="br-nums">
+        <div><b>${dollars(bal)}</b>balance (started at ${dollars(b.start)})</div>
+        <div><b class="${tone}">${net >= 0 ? '+' : '−'}${Math.abs(net / unit).toFixed(1)}u</b>profit in units (1 unit = ${dollars(Math.round(unit * 100) / 100)}, ${b.unit_pct}% of your start)</div>
+      </div>
+      <button class="linkbtn" type="button" data-br="open">Bankroll settings</button>
+    </div>
+    <p class="muted small br-rule">Suggested stakes: ${KELLY_WORD[b.kelly] || `${b.kelly}× Kelly`}, never more than ${b.cap_pct}% of your balance.
+      ${limits.length ? `Warnings: ${limits.join(', ')}.` : 'No limits set.'}</p>
+    ${balanceChart(b)}`;
+}
+
+function bankrollForm(b) {
+  const num = (key, label, step, hint, prefix = '', suffix = '') => `<label>${label}
+    <span class="br-in">${prefix}<input type="number" min="0" step="${step}" data-key="${key}" value="${b[key] || ''}" placeholder="0">${suffix}</span>
+    <small>${hint}</small></label>`;
+  return `<form class="br-form" id="brForm" novalidate>
+    <h3>Bankroll settings</h3>
+    <div class="br-grid">
+      ${num('start', 'Starting bankroll', '1', 'Money set aside for betting, before the wagers logged here.', '$')}
+      ${num('unit_pct', 'Unit size', '0.1', 'One unit as a share of your start. 1% is common.', '', '%')}
+      <label>Suggested stakes
+        <span class="br-in"><select data-key="kelly">${Object.entries(KELLY_WORD).map(([v, w]) =>
+          `<option value="${v}"${+v === b.kelly ? ' selected' : ''}>${w[0].toUpperCase() + w.slice(1)}${v === '0.25' ? ' (recommended)' : v === '1' ? ' (aggressive)' : ''}</option>`).join('')}</select></span>
+        <small>Kelly sizes a bet by its edge. Our chances are estimates, so a fraction is safer.</small></label>
+      ${num('cap_pct', 'Stake cap', '0.1', 'A suggested stake never goes above this share of your balance.', '', '%')}
+      ${num('max_stake', 'Maximum stake (optional)', '1', 'Warn when one wager is above this. Blank = off.', '$')}
+      ${num('daily_loss', 'Daily loss limit (optional)', '1', 'Warn once you\'re down this much in a day. Blank = off.', '$')}
+      ${num('exposure_pct', 'Pending limit (optional)', '1', 'Warn when pending bets add up to more than this share of your balance.', '', '%')}
+    </div>
+    <div class="wbuttons"><span class="spacer"></span>
+      ${bankrollSet() ? '<button class="linkbtn" type="button" data-br="close">Cancel</button>' : '<button class="linkbtn" type="button" data-br="close">Not now</button>'}
+      <button class="btn-scan" type="submit">Save</button></div>
+    <p class="muted small">Limits only warn you; nothing stops you from logging a wager. Saved on your computer and backed up with your wagers.</p>
+  </form>`;
+}
+
+// Balance after each day with settled wagers. One series, so no legend; hover shows the day.
+function balanceChart(b) {
+  const pts = Calc.balanceHistory(b, WAGERS.list);
+  if (!pts.length) return '<p class="muted small">Your balance chart appears once a wager is settled.</p>';
+  const all = [{ date: null, balance: b.start }, ...pts];
+  const W = 640, H = 170, L = 56, R = 12, T = 12, B = 24;
+  const vals = all.map(p => p.balance).concat(b.start);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi - lo < 1) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
+  const x = i => L + (all.length === 1 ? 0 : i * (W - L - R) / (all.length - 1));
+  const y = v => T + (hi - v) * (H - T - B) / (hi - lo);
+  const line = all.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.balance).toFixed(1)}`).join('');
+  const fmtDay = d => new Date(d + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const ticks = [hi - pad, (hi + lo) / 2, lo + pad];
+  const last = all[all.length - 1];
+  return `<figure class="br-chart" aria-label="Balance over time, from ${dollars(b.start)} to ${dollars(last.balance)}">
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">
+      ${ticks.map(v => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/>
+        <text class="ax" x="${L - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end">${dollars(Math.round(v))}</text>`).join('')}
+      <line class="start" x1="${L}" x2="${W - R}" y1="${y(b.start).toFixed(1)}" y2="${y(b.start).toFixed(1)}"/>
+      <path class="bal" d="${line}"/>
+      <circle class="end" r="4" cx="${x(all.length - 1).toFixed(1)}" cy="${y(last.balance).toFixed(1)}"/>
+      <text class="ax" x="${L}" y="${H - 6}">Start</text>
+      <text class="ax" x="${W - R}" y="${H - 6}" text-anchor="end">${fmtDay(last.date)}</text>
+      <line class="cross" x1="0" x2="0" y1="${T}" y2="${H - B}" style="display:none"/>
+      <circle class="dot" r="5" style="display:none"/>
+      <rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent"
+        data-pts='${esc(JSON.stringify(all.map((p, i) => [x(i), y(p.balance), p.date ? fmtDay(p.date) : 'Start', dollars(p.balance)])))}'/>
+    </svg>
+    <div class="br-tip" hidden></div>
+    <figcaption class="muted small">Balance after each day with a settled wager. The dashed line is your starting bankroll.</figcaption>
+  </figure>`;
+}
+
+// crosshair + tooltip on the balance chart
+$('#bankroll').addEventListener('mousemove', e => {
+  const hit = e.target.closest('.hit');
+  const fig = e.target.closest('.br-chart');
+  if (!fig) return;
+  const tip = fig.querySelector('.br-tip'), cross = fig.querySelector('.cross'), dot = fig.querySelector('.dot');
+  // SVG elements have no `hidden` property, so show and hide them with display
+  const show = on => { tip.hidden = !on; cross.style.display = dot.style.display = on ? '' : 'none'; };
+  if (!hit) return show(false);
+  const svg = fig.querySelector('svg'), box = svg.getBoundingClientRect();
+  const vx = (e.clientX - box.left) * svg.viewBox.baseVal.width / box.width;
+  const pts = JSON.parse(hit.dataset.pts);
+  const p = pts.reduce((a, q) => Math.abs(q[0] - vx) < Math.abs(a[0] - vx) ? q : a);
+  cross.setAttribute('x1', p[0]); cross.setAttribute('x2', p[0]);
+  dot.setAttribute('cx', p[0]); dot.setAttribute('cy', p[1]);
+  show(true);
+  tip.innerHTML = `<b>${esc(p[3])}</b>${esc(p[2])}`;
+  const px = p[0] * box.width / svg.viewBox.baseVal.width;
+  tip.style.left = Math.min(Math.max(px, 50), box.width - 50) + 'px';
+});
+$('#bankroll').addEventListener('mouseleave', () => {
+  document.querySelectorAll('#bankroll .br-tip').forEach(el => el.hidden = true);
+  document.querySelectorAll('#bankroll .cross, #bankroll .dot').forEach(el => el.style.display = 'none');
+});
+$('#bankroll').addEventListener('click', e => {
+  const btn = e.target.closest('[data-br]');
+  if (!btn) return;
+  WAGERS.settingsOpen = btn.dataset.br === 'open';
+  renderBankroll();
+  if (WAGERS.settingsOpen) $('#brForm [data-key="start"]').focus();
+});
+$('#bankroll').addEventListener('submit', async e => {
+  e.preventDefault();
+  const settings = {};
+  e.target.querySelectorAll('[data-key]').forEach(el => settings[el.dataset.key] = el.value === '' ? 0 : +el.value);
+  try {
+    await wagersApi({ action: 'bankroll', bankroll: settings });
+    WAGERS.settingsOpen = false;
+    setWagerStatus('Bankroll settings saved.');
+    renderWagers();
+  } catch (err) { setWagerStatus(err.message, true); }
+});
+
+// Suggested stake for a bet in its pop-up.
+function stakeSuggestion(r) {
+  if (!bankrollSet()) return { text: 'Set up your bankroll in My wagers to see a suggested stake.', stake: 0 };
+  const b = WAGERS.bankroll, bal = Calc.balance(b, WAGERS.list), c = confidence(r);
+  const k = Calc.kellyStake(chance(r), r.decimal, bal, b, c.level);
+  const how = KELLY_WORD[b.kelly] || `${b.kelly}× Kelly`;
+  if (!k.stake) return { text: `Suggested stake: $0. At ${r.american} there's no edge over its ${pct(chance(r), 0)} chance of success.`, stake: 0 };
+  return { stake: k.stake, text: `Suggested stake: <b>${dollars(k.stake)}</b>, ${(k.share * 100).toFixed(1)}% of your ${dollars(bal)} balance (${how}${c.level === 'low' ? ', halved for low confidence' : ''}${k.capped ? `, capped at ${b.cap_pct}%` : ''}).` };
+}
+
 // ---- the list and the stats
 function wagerCutoff() {
   const v = $('#wRange').value, today = todayLocal();
@@ -1537,6 +1701,7 @@ function wagerCutoff() {
 }
 
 function renderWagers() {
+  renderBankroll();
   const cutoff = wagerCutoff();
   const list = WAGERS.list.filter(w => !cutoff || w.date >= cutoff);
   const s = Calc.wagerSummary(list);
@@ -1545,6 +1710,7 @@ function renderWagers() {
   const name = w => esc(w.note || 'Wager');
   $('#wSummary').innerHTML = list.length ? [
     s.count && card(signedDollars(s.net), tone(s.net), s.net >= 0 ? 'net profit' : 'net loss'),
+    s.count && bankrollSet() && card(`${s.net >= 0 ? '+' : '−'}${Math.abs(s.net / unitSize(WAGERS.bankroll)).toFixed(1)}u`, tone(s.net), 'net in units'),
     s.count && card(signedDollars(s.totalWon), s.totalWon ? 'up' : '', `total won on ${s.won} winning bet${s.won === 1 ? '' : 's'}`),
     s.count && card(s.totalLost ? signedDollars(-s.totalLost) : '$0', s.totalLost ? 'down' : '', `total lost on ${s.lost} losing bet${s.lost === 1 ? '' : 's'}`),
     s.count && card(s.winRate != null ? pct(s.winRate, 0) : '–', '', `win rate (${s.won}-${s.lost}${s.push ? `-${s.push}` : ''} won-lost${s.push ? '-push' : ''})`),
@@ -1631,6 +1797,10 @@ $('#wForm').addEventListener('submit', async e => {
     }
   }
   const editing = WAGERS.editing;
+  if (WAGERS.bankroll) {
+    const warn = Calc.bankrollWarnings(wagers, WAGERS.list.filter(w => w.id !== editing), WAGERS.bankroll, todayLocal());
+    if (warn.length && !confirm(`${warn.join('\n')}\n\n${editing ? 'Save it' : 'Add it'} anyway?`)) return;
+  }
   $('#wAdd').disabled = true;
   try {
     if (editing) await wagersApi({ action: 'update', id: editing, wager: wagers[0] });

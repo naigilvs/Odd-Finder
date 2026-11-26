@@ -138,6 +138,25 @@ class WagerLog(unittest.TestCase):
         self.assertNotIn("legs", single)
         self.assertNotIn("decimal", single)
 
+    def test_bankroll_settings_saved_next_to_wagers(self):
+        self.assertEqual(self.store.bankroll, wagers.BANKROLL_DEFAULTS)            # not set up yet
+        saved = self.store.set_bankroll({"start": "500", "unit_pct": 1, "kelly": 0.25, "cap_pct": 2, "max_stake": 25})
+        self.assertEqual(saved["start"], 500.0)
+        self.assertEqual(saved["daily_loss"], 0.0)                                  # missing -> default (off)
+        again = wagers.WagerStore(self.store.path)
+        self.assertEqual(again.bankroll["max_stake"], 25.0)
+        self.assertEqual(again.bankroll_path.name, "bankroll.json")
+        demo = wagers.WagerStore(Path(self.tmp.name) / "wagers_demo.json")
+        self.assertEqual(demo.bankroll_path.name, "bankroll_demo.json")
+
+    def test_bad_bankroll_settings_are_refused(self):
+        for data, words in [({"start": -5}, "starting bankroll"), ({"kelly": 3}, "Kelly fraction"),
+                            ({"cap_pct": "abc"}, "number"), ({"exposure_pct": 150}, "pending limit"), ("x", "missing")]:
+            with self.assertRaises(ValueError) as e:
+                self.store.set_bankroll(data)
+            self.assertIn(words, str(e.exception))
+        self.assertEqual(self.store.bankroll, wagers.BANKROLL_DEFAULTS)            # unchanged
+
 
 if __name__ == "__main__":
     unittest.main()
