@@ -32,6 +32,7 @@ from pathlib import Path
 
 import backup
 import chatbot
+import gemini
 import injuries
 import picks
 import props_stats
@@ -162,6 +163,7 @@ SPORTSDB_GAP_SECONDS = 2.5
 
 DEMO = False
 API_KEY = None
+GEMINI_KEY = None      # Google AI Studio key (config.json "gemini_key"): AI answers for questions the chatbot can't
 RUNDOWN_KEY = None     # TheRundown's free key (config.json "therundown_key"): main lines without credits
 _cache = {}
 _cache_lock = threading.Lock()
@@ -954,6 +956,70 @@ def chat_result(bet):
             "us": us, "them": them, "date": g["date"], "won": us > them, "tie": us == them}
 
 
+def ai_facts(message, page_facts):
+    """The fact sheet sent with a question to the AI: what the page knows (the bet being
+    discussed, tonight's top picks, your record) and, for any player or team named, their
+    next game, injury news, recent form and last result. Only betting data: nothing personal."""
+    lines = [f"Now: {datetime.now().astimezone().strftime('%A %B %d, %Y, %I:%M %p %Z')}. Sportsbook: FanDuel."]
+    if isinstance(page_facts, list):
+        lines += [str(x)[:300] for x in page_facts[:40] if isinstance(x, str)]
+    text = chatbot.norm(message)
+    seen, rest = [], text
+    for _ in range(2):                                        # up to two players ("LeBron vs Jokic")
+        player, _ = chatbot.find_player(rest)
+        if not player:
+            break
+        seen.append({"kind": "player", "sport_key": player["sport"], "player": player["name"], "team": player["team"]})
+        for w in chatbot._key(player["name"]).split():       # take this player's name out, look for another
+            rest = re.sub(rf"\b{re.escape(w)}\b", " ", rest)
+        rest = re.sub(r"\b(lebron|steph|giannis|luka|sga|kd|ad)\b", lambda m: " " if chatbot._key(chatbot.NICKNAMES.get(m.group(1), "")) == chatbot._key(player["name"]) else m.group(1), rest)
+    for sport, team in chatbot.find_teams(text)[:2]:
+        seen.append({"kind": "team", "sport_key": sport, "team": team})
+    for b in seen[:3]:
+        try:
+            chat_bet(b)
+        except Exception:
+            continue
+        who = b.get("player") or b.get("team")
+        if b.get("event"):
+            lines.append(f"{who}: next game {b['event']} at {b['start']}.")
+        elif b.get("error"):
+            lines.append(f"{who}: {b['error']}")
+        inj = (b.get("injury") or {}).get("player")
+        if b.get("player"):
+            lines.append(f"{who} injury report: {inj['status']} ({inj.get('comment', '')})" if inj else f"{who} is not on the injury report.")
+        for team_key, ps in (b.get("injury_teams") or {}).items():
+            if ps:
+                lines.append(f"{team_key.split('|', 1)[1]} injuries: " + ", ".join(f"{x['name']} ({x['status']})" for x in ps[:6]))
+        for f in (b.get("forms") or {}).values():
+            if not f:
+                continue
+            if "stat" in f:
+                lines.append(f"{who} {f['stat']}: last 5 avg {f['last5']['avg']}, last 10 avg {f['last10']['avg']}, last 20 avg {f['last20']['avg']}; "
+                             f"recent games: " + ", ".join(str(g["value"]) for g in f["recent"][:10]))
+            elif "record" in f:
+                lines.append(f"{who} last {len(f['games'])} games: {f['record']}, scoring {f['for']} and allowing {f['against']} on average.")
+        if b["kind"] == "team":
+            r = chat_result(b)
+            if r:
+                lines.append(f"{r['team']} last game: {'won' if r['won'] else 'tied' if r['tie'] else 'lost'} {r['us']:g}-{r['them']:g} "
+                             f"{'vs' if r['home'] else 'at'} {r['opponent']} on {r['date'][:10]}.")
+    return "\n".join(lines)
+
+
+def ai_answer(body):
+    """A question the chatbot couldn't answer, sent to the AI with the fact sheet."""
+    if not GEMINI_KEY:
+        return {"error": "No AI is connected."}
+    message = str(body.get("message") or "")[:500]
+    history = [(h.get("who"), h.get("text")) for h in body.get("history") or [] if isinstance(h, dict)][-6:]
+    try:
+        facts = ai_facts(message, body.get("facts"))
+        return {"answer": gemini.ask(GEMINI_KEY, message, facts, history)}
+    except gemini.GeminiError as e:
+        return {"error": str(e)}
+
+
 def chat_answer(message, context=None):
     """What the chat message asks, with the data the page needs to answer it. `context` is the
     bet talked about last (for follow-ups like "the under" or "is he playing")."""
@@ -1113,7 +1179,7 @@ def demo_events(sport, target, include_props):
     return events
 
 
-CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py", ROOT / "props_stats.py", ROOT / "wagers.py", ROOT / "injuries.py", ROOT / "rundown.py", ROOT / "chatbot.py"]
+CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py", ROOT / "props_stats.py", ROOT / "wagers.py", ROOT / "injuries.py", ROOT / "rundown.py", ROOT / "chatbot.py", ROOT / "gemini.py"]
 _started_with = {f: f.stat().st_mtime for f in CODE_FILES if f.exists()}
 
 
@@ -1277,7 +1343,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans", "/api/wagers", "/api/injuries", "/api/chat", "/api/autoscan"):
+        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans", "/api/wagers", "/api/injuries", "/api/chat", "/api/autoscan", "/api/ai"):
             return self.send_json({"error": "Not found"}, 404)
         length = int(self.headers.get("Content-Length") or 0)
         if length > 20_000_000:          # room for a full browser copy of saved scans
@@ -1319,6 +1385,8 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self.send_json({"error": str(e)}, 400)
             return self.send_json(autoscan_status())
+        if path == "/api/ai":
+            return self.send_json(ai_answer(body))
         if path == "/api/chat":
             return self.send_json(chat_answer(str(body.get("message") or "")[:500], body.get("context")))
         if path == "/api/injuries":
@@ -1425,7 +1493,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "github_backup": GITBACKUP.status() if GITBACKUP else {"enabled": False},
                                 "prop_sports": list(PROP_MARKETS),
                                 "rundown": bool(RUNDOWN_KEY) and not DEMO, "rundown_usage": rundown.usage,
-                                "rundown_sports": list(rundown.SPORT_IDS)})
+                                "rundown_sports": list(rundown.SPORT_IDS), "ai": bool(GEMINI_KEY) and not DEMO})
             elif url.path == "/api/autoscan":
                 self.send_json(autoscan_status())
             elif url.path == "/api/accuracy":
@@ -1478,13 +1546,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global DEMO, API_KEY, RUNDOWN_KEY, AUTOSCAN, IMAGES, PICKS, TRACK, BACKUP, GITBACKUP, SCANS, WAGERS
+    global DEMO, API_KEY, RUNDOWN_KEY, AUTOSCAN, GEMINI_KEY, IMAGES, PICKS, TRACK, BACKUP, GITBACKUP, SCANS, WAGERS
     ap = argparse.ArgumentParser(description="Betting value finder")
     ap.add_argument("--demo", action="store_true", help="use made-up sample data")
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args()
     API_KEY = load_api_key()
     RUNDOWN_KEY = (os.environ.get("THERUNDOWN_KEY") or load_config().get("therundown_key") or "").strip() or None
+    GEMINI_KEY = (os.environ.get("GEMINI_KEY") or load_config().get("gemini_key") or "").strip() or None
     DEMO = args.demo or not API_KEY
     IMAGES = ImageFinder()
     if DEMO:   # keep made-up demo picks and results apart from real ones

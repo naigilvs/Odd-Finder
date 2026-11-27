@@ -80,7 +80,7 @@ class Reading(unittest.TestCase):
                  # questions people actually asked that it first didn't understand
                  "can u talk to me": "talk", "any nba?": "best", "nba picks": "best", "what about nfl": "best",
                  "give me nfl picks": "best", "why": "why", "check a bet": "checkhelp",
-                 "any suggestions?": "best", "news": "faq"}
+                 "any suggestions?": "best", "news": "faq", "are the props out?": "faq"}
         for text, intent in cases.items():
             self.assertEqual(chatbot.parse(text)["intent"], intent, text)
         self.assertEqual(chatbot.parse("best nba props")["sports"], ["basketball_nba"])

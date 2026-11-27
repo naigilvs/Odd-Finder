@@ -178,10 +178,76 @@ async function answer(p, text) {
     }
     case 'about': return botSay(aboutAnswer(p.bets[0]), ['Best bets tonight']);
     default:
+      if (state.cfg && state.cfg.ai) {
+        const ai = await aiAnswer(text);
+        if (ai) return ai;
+      }
       CHAT.unknowns = (CHAT.unknowns || 0) + 1;
       return botSay(CHAT.unknowns === 1
         ? `I'm not sure what you mean, sorry: I'm a chatbot for betting questions, so I can't answer everything. I've saved it so I can learn it. Did you mean one of these? Or try a bet like <i>Knicks −4.5</i>.`
         : `Sorry, I didn't get that either (saved so I can learn it). Here's what I can do:<br>${helpText()}`, p.suggestions || CHIPS_START);
+  }
+}
+
+// ---- AI (Gemini) for questions the chatbot doesn't understand
+// What the page knows, as short lines for the AI's fact sheet: the bet being discussed,
+// tonight's best and likeliest bets, and your record. Only betting data, nothing personal.
+function aiFacts(question) {
+  const lines = [];
+  const r = CHAT.last;
+  if (r) {
+    const parts = [`Bet being discussed: ${betLabel(r)}${r.decimal ? ` at ${r.american}` : ''} (${r.event}, starts ${r.start}).`];
+    try {
+      parts.push(`Chance of success ${pct(chance(r), 0)}${r.ev != null ? `, value ${signed(r.ev)}` : ''}, ${r.stats_only ? 'stats only, no market price' : `${confidence(r).label} confidence`}.`);
+      if (r.decimal) parts.push(`Verdict: ${yesNo(r, ...verdictOf(r)).slice(1).join(': ')}.`);
+    } catch (e) { /* partial facts are fine */ }
+    const inj = (INJ.known[statKey(r)] || {}).player;
+    if (inj) parts.push(`${inj.name} is listed ${inj.status} on the injury report.`);
+    lines.push(parts.join(' '));
+  }
+  const now = new Date().toISOString();
+  const rows = scannedRows().filter(x => x.start > now);
+  if (rows.length) {
+    const value = Calc.pickSides(rows, 'value', chance).filter(x => x.ev > 0).sort((a, b) => b.ev - a.ev).slice(0, 5);
+    const likely = Calc.pickSides(rows, 'likely', chance).sort((a, b) => chance(b) - chance(a)).slice(0, 3);
+    const fmt = x => `${betLabel(x)} ${x.american} (${x.event}): ${pct(chance(x), 0)} chance, value ${signed(x.ev)}, ${confidence(x).label} confidence`;
+    lines.push(value.length ? `Best-value bets in the scans: ${value.map(fmt).join('; ')}.` : 'No bets with positive value in the current scans.');
+    lines.push(`Most likely to win in the scans: ${likely.map(fmt).join('; ')}.`);
+    lines.push(rows.every(x => x.books_used.length <= 2) ? 'Scans use free odds: FanDuel compared with DraftKings and BetMGM only.' : 'Scans compare FanDuel with several sportsbooks.');
+  } else {
+    lines.push('No odds scanned right now.');
+  }
+  // your own record and bankroll only when the question is about you
+  const aboutMe = /\b(i|i'?m|me|my|mine|myself|bankroll|record|wagers?|balance)\b/i.test(question || '');
+  if (aboutMe && WAGERS.list.length) {
+    const s = Calc.wagerSummary(WAGERS.list);
+    lines.push(`User's logged wagers: ${s.won}-${s.lost}${s.push ? `-${s.push}` : ''}, net ${signedDollars(s.net)} on ${dollars(s.wagered)} wagered, ${s.pending} pending.`);
+  }
+  if (aboutMe && bankrollSet()) lines.push(`User's bankroll balance: ${dollars(Calc.balance(WAGERS.bankroll, WAGERS.list))}.`);
+  return lines;
+}
+
+function chatHistory() {
+  return [...document.querySelectorAll('#chatLog .cmsg:not(.typing)')].slice(-7, -1)
+    .map(m => ({ who: m.classList.contains('me') ? 'user' : 'bot', text: m.innerText.replace(/\s+/g, ' ').slice(0, 400) }));
+}
+
+async function aiAnswer(text) {
+  const wait = addMsg('bot typing', 'Thinking…');
+  try {
+    const r = await fetch('/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, facts: aiFacts(text), history: chatHistory() }) });
+    const j = await r.json();
+    wait.remove();
+    if (!r.ok || j.error || !j.answer) {
+      if (j && j.error) botSay(`<span class="muted small">AI unavailable: ${esc(j.error)}</span>`);
+      return null;
+    }
+    const html = esc(j.answer).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
+    return botSay(`<span class="ailabel">✨ AI answer (Gemini) · can be wrong; the numbers come from the bot</span>${html}`, CHIPS_START);
+  } catch (e) {
+    wait.remove();
+    return null;
   }
 }
 
@@ -195,6 +261,7 @@ const FAQ_TEXT = {
   live: 'I only check bets <b>before</b> the game starts: live odds move too fast to compare reliably, so I don\'t judge in-game bets.',
   other_books: 'Right now I check <b>FanDuel</b>\'s prices against the other books. Other sportsbooks show up in each bet\'s price comparison, but picks are for FanDuel. Adding another sportsbook as the main one is possible later.',
   props_vs_lines: 'Player props are where sportsbooks make more mistakes, but they\'re also thinner markets with bigger margins. Game lines are sharper (harder to beat) but more reliable. The bot shows both; value is what matters, not the bet type.',
+  props_out: 'FanDuel usually posts player props the day before or the morning of a game, closer to tip-off for some players. Props come from The Odds API (about 4 credits a game), so I don\'t fetch them on my own: tick <b>Player props</b> and press Scan in Find bets, or open <b>More bets</b> for one game. If a scan finds none, they aren\'t posted yet: try again closer to game time.',
   news: 'I don\'t have news headlines yet, but I do have ESPN\'s injury reports (NBA, NHL, NFL): ask <i>is Embiid playing</i> or <i>is anyone hurt on the Knicks</i>. For a player\'s recent games, ask <i>LeBron last 10</i>.',
   units_size: 'A unit is usually 1% of your bankroll (1–2% is common). With $500, one unit is $5. Set it in <b>My wagers → Bankroll settings</b>.',
 };

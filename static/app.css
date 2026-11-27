@@ -569,3 +569,4 @@
   .cyes { margin: 8px 0 0; font-size: 15px; }
   .cyes b { font: 700 19px var(--display); }
   .cyes.good b { color: var(--turf); } .cyes.bad b { color: #ff6b6f; } .cyes.ok b { color: var(--amber); }
+  .ailabel { display: block; font-size: 11px; color: var(--amber); margin-bottom: 4px; letter-spacing: .02em; }

@@ -70,7 +70,10 @@ i me my bet bets take tonight today tomorrow game games win wins ml moneyline mo
 assists threes shots goal yards rush rec receiving passing pass receptions catches odds plus minus even pick team total
 props prop best top good value check hit will going go does do anyone any who which with more less than about think
 yes no ok okay thanks please can you tell show last form injury injured playing play status news vs versus spread
-half quarter first second period""".split())
+half quarter first second period season seasons year years week weekend month better worse best worst
+good bad great player players stats stat average averages career league compare comparison than more most less
+night morning afternoon evening line lines bet bettor money win lose loss losses wins winning losing chance chances
+think thinks know knows tell said says hedge parlay parlays leg legs hit hits miss misses""".split())
 
 # Common nicknames -> full names (first names that are unique are matched on their own).
 NICKNAMES = {"steph": "stephen curry", "kd": "kevin durant", "ad": "anthony davis", "sga": "shai gilgeous-alexander",
@@ -174,6 +177,14 @@ def find_teams(text, sports=None):
         for team in ts:
             for a in team_aliases(team, sport):
                 alias.setdefault(a, set()).add((sport, team))
+    # a close spelling of a one-word team name ("jaquars" -> jaguars), if it fits only one team
+    singles = [a for a in alias if " " not in a and len(a) >= 5]
+    for w in re.findall(r"[a-z]{5,}", text):
+        if w in alias or w in WORDS_NOT_NAMES:
+            continue
+        m = difflib.get_close_matches(w, singles, n=1, cutoff=0.84)
+        if m and len(alias[m[0]]) == 1:
+            text = re.sub(rf"\b{w}\b", m[0], text)
     padded = f" {text} "
     found, used = [], []
     for a in sorted(alias, key=len, reverse=True):
@@ -439,6 +450,7 @@ FAQ = [
     ("live", r"\b(live bet|live betting|in.?game|during the game)\b"),
     ("other_books", r"\b(draftkings|betmgm|caesars|bet365|espn ?bet|other (apps|books|sportsbooks))\b"),
     ("props_vs_lines", r"\b(props? or (game )?lines|lines or props|which is better props)\b"),
+    ("props_out", r"\b(are|r) (the )?props (out|up|posted|available|ready)\b|\bprops (out|up|posted) yet\b|\bwhen (are|do) props\b"),
     ("units_size", r"\bhow much (is|should) (a|one) unit\b"),
     ("news", r"\bnews\b|\bheadlines?\b|\bwhat('?s| is) (new|happening)\b|\brumou?rs?\b|\btrades?\b"),
 ]
