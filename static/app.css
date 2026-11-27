@@ -566,3 +566,6 @@
   .auto-edit { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; text-align: left; }
   .auto-edit select { background: var(--ink); border: 1px solid var(--line); border-radius: 6px; color: var(--chalk); padding: 3px 6px; }
   .btn-scan.small { padding: 4px 12px; font-size: 14px; }
+  .cyes { margin: 8px 0 0; font-size: 15px; }
+  .cyes b { font: 700 19px var(--display); }
+  .cyes.good b { color: var(--turf); } .cyes.bad b { color: #ff6b6f; } .cyes.ok b { color: var(--amber); }

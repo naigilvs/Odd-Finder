@@ -79,7 +79,8 @@ class Reading(unittest.TestCase):
                  "Tatum over 27.5 points or Brown over 22.5 points": "compare", "over 224.5": "check",
                  # questions people actually asked that it first didn't understand
                  "can u talk to me": "talk", "any nba?": "best", "nba picks": "best", "what about nfl": "best",
-                 "give me nfl picks": "best", "why": "why", "check a bet": "checkhelp"}
+                 "give me nfl picks": "best", "why": "why", "check a bet": "checkhelp",
+                 "any suggestions?": "best", "news": "faq"}
         for text, intent in cases.items():
             self.assertEqual(chatbot.parse(text)["intent"], intent, text)
         self.assertEqual(chatbot.parse("best nba props")["sports"], ["basketball_nba"])
@@ -105,6 +106,34 @@ class Reading(unittest.TestCase):
         # a recommendation question still works mid-conversation about another bet
         ctx = {"kind": "player", "sport_key": "basketball_nba", "player": "Nikola Jokic", "team": "Denver Nuggets"}
         self.assertEqual(chatbot.parse("what should i bet on", ctx)["intent"], "best")
+
+    def test_scoped_requests_yes_no_and_new_topics(self):
+        def ask(text):
+            out = chatbot.parse(text)
+            return out["intent"], out
+        intent, out = ask("best bet in the knicks game")
+        self.assertEqual((intent, out["scope"]["team"]), ("best", "New York Knicks"))
+        intent, out = ask("best bet for lebron")
+        self.assertEqual((intent, out["scope"]["player"]), ("best", "LeBron James"))
+        self.assertEqual(ask("what should i bet on in the knicks game")[1]["scope"]["team"], "New York Knicks")
+        self.assertIsNone(ask("best nba bet")[1]["scope"])
+        intent, out = ask("should i bet the knicks")
+        self.assertEqual((intent, out["bets"][0]["market"], out["bets"][0]["yesno"]), ("check", "h2h", True))
+        self.assertTrue(ask("would you take knicks -4.5")[1]["bets"][0]["yesno"])
+        self.assertEqual(ask("should i bet on lebron")[0], "about")                  # which prop? asks
+        self.assertEqual(ask("when do the lakers play")[0], "schedule")
+        self.assertEqual(ask("who plays tonight")[0], "schedule")
+        self.assertEqual(ask("did the lakers win")[0], "result")
+        self.assertEqual(ask("lakers to win +130")[0], "check")                      # a bet, not a result
+        self.assertEqual(ask("who will win celtics vs knicks")[0], "winner")
+        for text, topic in (("any tips?", "win"), ("how does the bot work", "how_work"), ("are parlays worth it", "parlays"),
+                            ("i keep losing", "losing"), ("is betting worth it", "worth")):
+            self.assertEqual((ask(text)[0], ask(text)[1]["topic"]), ("faq", topic), text)
+        for text in ("how are you", "who are you", "lol", "bye"):
+            self.assertEqual(ask(text)[0], "smalltalk", text)
+        intent, out = ask("the weather today")
+        self.assertEqual(intent, "unknown")
+        self.assertTrue(out["suggestions"])
 
     def test_shared_last_names(self):
         out = chatbot.parse("brown over 12.5 points")
@@ -181,6 +210,21 @@ class ServerAnswer(unittest.TestCase):
     def test_team_bet_uses_the_games_spelling(self):
         b = self.run_chat("nuggets -4.5", lambda items: ({"chat": {"prob": 0.55}}, 0))["bets"][0]
         self.assertEqual((b["outcome"], b["selection"], b["opponent"]), ("Denver Nuggets", "Denver Nuggets -4.5", "Utah Jazz"))
+
+    def test_teams_that_dont_play_each_other(self):
+        b = self.run_chat("who will win nuggets vs knicks")["bets"][0]
+        self.assertIn("don't play each other soon", b["error"])
+
+    def test_schedule_and_result(self):
+        with mock.patch.object(app, "upcoming_games", return_value=self.games):
+            out = app.chat_answer("when do the nuggets play")
+        self.assertEqual([g["event_id"] for g in out["games"]], ["g1"])
+        game = {"id": "x", "date": "2026-11-20T02:00Z", "home": "Utah Jazz", "away": "Denver Nuggets", "hs": 99, "as": 120}
+        fake = mock.MagicMock()
+        fake.store.games.return_value = [game]
+        with mock.patch.dict(app.stats._leagues, {"basketball_nba": fake}):
+            r = app.chat_result({"kind": "team", "sport_key": "basketball_nba", "team": "Denver Nuggets"})
+        self.assertEqual((r["won"], r["us"], r["them"], r["home"]), (True, 120, 99, False))
 
     def test_no_game_found(self):
         b = self.run_chat("celtics ml")["bets"][0]

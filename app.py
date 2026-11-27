@@ -848,6 +848,8 @@ def chat_bet(bet):
         if live and parse_time(live["commence_time"]) <= datetime.now(timezone.utc):
             bet["error"] = (f"{live['away_team']} @ {live['home_team']} has already started. The bot only checks bets "
                             f"before the start, because live odds move too fast.")
+        elif opp:
+            bet["error"] = f"{team} and {opp} don't play each other soon. Ask \"when do the {team.split()[-1]} play\" for their next game."
         else:
             bet["error"] = f"I couldn't find an upcoming {team} game in the schedule."
         return bet
@@ -886,17 +888,82 @@ def chat_bet(bet):
     return bet
 
 
+CHAT_LEAGUES = ["basketball_nba", "icehockey_nhl", "americanfootball_nfl"]      # "who plays tonight" with no league
+
+
+def chat_schedule(p):
+    """Upcoming games for a schedule question: one team's next few, or a day's games."""
+    scope = p.get("scope") or {}
+    sports = [scope["sport_key"]] if scope.get("sport_key") else p.get("sports") or CHAT_LEAGUES
+    now = datetime.now(timezone.utc)
+    local = now.astimezone()
+    if p.get("window") == "tomorrow":
+        start = (local + timedelta(days=1)).replace(hour=5, minute=0, second=0, microsecond=0)
+    else:
+        start = now
+    end = (local + timedelta(days=2 if p.get("window") == "tomorrow" else 1)).replace(hour=5, minute=0, second=0, microsecond=0)
+    games = []
+    for sport in sports[:6]:
+        for g in upcoming_games(sport):
+            t = parse_time(g["commence_time"])
+            if scope.get("team"):
+                if not (stats._same_team(scope["team"], g["home_team"]) or stats._same_team(scope["team"], g["away_team"])):
+                    continue
+            elif not (start <= t < end):
+                continue
+            games.append({"sport_key": sport, "sport": g.get("sport_title") or sport_title(sport), "home": g["home_team"],
+                          "away": g["away_team"], "start": g["commence_time"], "event_id": g["id"]})
+    games.sort(key=lambda g: g["start"])
+    return games[:3] if scope.get("team") else games[:30]
+
+
+def chat_result(bet):
+    """A team's last finished game (score, win or loss), or a player's last game line."""
+    sport = bet.get("sport_key")
+    if bet.get("kind") == "player":
+        return None                                           # the bet's recent games (its forms) answer it
+    lg = stats._leagues.get(sport)
+    if not lg:
+        return None
+    team = bet.get("team")
+    games = [g for g in lg.store.games() if stats._same_team(g["home"], team) or stats._same_team(g["away"], team)]
+    if not games:
+        return None
+    g = max(games, key=lambda x: x["date"])
+    home = stats._same_team(g["home"], team)
+    us, them = (g["hs"], g["as"]) if home else (g["as"], g["hs"])
+    return {"team": g["home"] if home else g["away"], "opponent": g["away"] if home else g["home"], "home": home,
+            "us": us, "them": them, "date": g["date"], "won": us > them, "tie": us == them}
+
+
 def chat_answer(message, context=None):
     """What the chat message asks, with the data the page needs to answer it. `context` is the
     bet talked about last (for follow-ups like "the under" or "is he playing")."""
     p = chatbot.parse(message, context)
     if p["intent"] == "unknown":
         chatbot.log_unknown(message)
+    try:
+        if p["intent"] == "schedule":
+            p["games"] = chat_schedule(p)
+        if p["intent"] == "result" and p.get("bets"):
+            p["result"] = chat_result(p["bets"][0])
+        if p.get("scope") and p["intent"] in ("best", "schedule"):
+            p["scope"] = chat_bet(dict(p["scope"]))           # the game, form and injuries for a scoped request
+    except Exception as e:
+        p["error_note"] = f"Something went wrong looking that up: {e}"
     for b in p.get("bets", []):
         try:
             chat_bet(b)
         except Exception as e:   # one lookup failing shouldn't break the reply
             b["error"] = f"Something went wrong looking that up: {e}"
+    if p["intent"] == "winner" and p.get("bets") and p["bets"][0].get("opponent") and not p["bets"][0].get("error"):
+        first = p["bets"][0]
+        other = {"kind": "team", "sport_key": first["sport_key"], "team": first["opponent"], "opponent": first["team"],
+                 "market": "h2h", "outcome": first["opponent"], "odds": None, "decimal": None}
+        try:
+            p["bets"].append(chat_bet(other))                 # both teams' chances, to say who the bot likes
+        except Exception as e:
+            p["error_note"] = f"Something went wrong looking that up: {e}"
     return p
 
 

@@ -155,6 +155,11 @@ async function answer(p, text) {
     case 'bot': return botSay(await botAnswer(), ['Best bets tonight', "What's CLV?"]);
     case 'best': return bestAnswer(p);
     case 'more': return moreAnswer();
+    case 'schedule': return botSay(scheduleAnswer(p), ['What should I bet on tonight?', 'Safest bets tonight']);
+    case 'result': return botSay(resultAnswer(p), ['Who plays tonight?', 'What should I bet on tonight?']);
+    case 'winner': return winnerAnswer(p.bets);
+    case 'faq': return botSay(FAQ_TEXT[p.topic] || helpText(), ['What should I bet on tonight?', 'Check a bet']);
+    case 'smalltalk': return botSay(SMALLTALK_TEXT[p.topic] || 'Ha. Ask me about a bet whenever you like.', CHIPS_START);
     case 'choose': {
       const names = p.bets[0].choices;
       return botSay(`Which player did you mean?`, names.map(n => `${n.replace(/ \(.*\)$/, '')} ${text}`.slice(0, 120)));
@@ -175,9 +180,81 @@ async function answer(p, text) {
     default:
       CHAT.unknowns = (CHAT.unknowns || 0) + 1;
       return botSay(CHAT.unknowns === 1
-        ? `I didn't understand that one, sorry. I've saved it so I can learn it later. Here's what I can do:<br>${helpText()}`
-        : `Sorry, I didn't get that either (saved so I can learn it). Try a bet like <i>Knicks −4.5</i>, or tap one of these:`, CHIPS_START);
+        ? `I'm not sure what you mean, sorry: I'm a chatbot for betting questions, so I can't answer everything. I've saved it so I can learn it. Did you mean one of these? Or try a bet like <i>Knicks −4.5</i>.`
+        : `Sorry, I didn't get that either (saved so I can learn it). Here's what I can do:<br>${helpText()}`, p.suggestions || CHIPS_START);
   }
+}
+
+const FAQ_TEXT = {
+  losing: 'Sorry, that\'s rough. Losing streaks happen to everyone, even with good bets, so <b>don\'t chase losses</b> with bigger bets. Take a break, keep bets small (1–2% of your bankroll), and set a daily loss limit in <b>My wagers → Bankroll settings</b>; I\'ll warn you when you hit it. If betting stops being fun or you feel you can\'t stop, call or text <b>1-800-GAMBLER</b> (free, 24/7).',
+  how_work: 'I compare FanDuel\'s price on every bet with other sportsbooks (their prices with the margin removed: the "market"), and add the bot\'s stats models (team ratings, player stats, injuries). A bet is <b>good value</b> when FanDuel pays more than its chance of winning is worth. Every bet is tracked and graded afterwards, so you can see how the bot does in <b>Bot results</b>.',
+  win: 'Honest tips: <b>1)</b> bet only when the price is better than the chance (value), not on hunches; <b>2)</b> keep each bet small, 1–2% of your bankroll; <b>3)</b> shop for the best price; <b>4)</b> track every bet (My wagers); <b>5)</b> avoid big parlays; <b>6)</b> judge yourself over hundreds of bets, not one night. Even good bettors lose often: the edge only shows over time.',
+  parlays: 'Parlays pay big but the sportsbook\'s margin stacks up on every leg, so on average they lose more than single bets. A 2–3 leg parlay of real value picks can be fine for fun; long parlays are mostly lottery tickets. Same-game legs that go together (a QB and his receiver) aren\'t priced as independent, so be careful there.',
+  bankroll_size: 'Only money you can afford to lose completely. Pick an amount for the season, then bet 1–2% of it per bet (that\'s your unit). Set it in <b>My wagers → Set up bankroll</b> and I\'ll suggest a stake for every bet.',
+  worth: 'For most people betting loses money over time, because the sportsbook takes a cut on every bet. You can do better than average by only betting real value, keeping bets small and tracking results, but there\'s no guaranteed profit. Treat it as entertainment with a budget.',
+  live: 'I only check bets <b>before</b> the game starts: live odds move too fast to compare reliably, so I don\'t judge in-game bets.',
+  other_books: 'Right now I check <b>FanDuel</b>\'s prices against the other books. Other sportsbooks show up in each bet\'s price comparison, but picks are for FanDuel. Adding another sportsbook as the main one is possible later.',
+  props_vs_lines: 'Player props are where sportsbooks make more mistakes, but they\'re also thinner markets with bigger margins. Game lines are sharper (harder to beat) but more reliable. The bot shows both; value is what matters, not the bet type.',
+  news: 'I don\'t have news headlines yet, but I do have ESPN\'s injury reports (NBA, NHL, NFL): ask <i>is Embiid playing</i> or <i>is anyone hurt on the Knicks</i>. For a player\'s recent games, ask <i>LeBron last 10</i>.',
+  units_size: 'A unit is usually 1% of your bankroll (1–2% is common). With $500, one unit is $5. Set it in <b>My wagers → Bankroll settings</b>.',
+};
+const SMALLTALK_TEXT = {
+  how: 'Doing good, thanks! Ready to look at some bets. Want the best ones for tonight?',
+  who: 'I\'m the Odd Finder chat: I answer from the bot\'s own numbers (odds, stats, injuries, your records). I\'m not an AI, so I stick to betting questions.',
+  laugh: '😄 Anything you want me to check?',
+  bye: 'See you! Good luck, and bet responsibly.',
+  morning: 'Hey! Want to see what\'s good tonight?',
+  smart: 'I try! I only know what the bot\'s numbers say, so I\'m best at bet questions. Tell me what I got wrong and I\'ll get better at it.',
+};
+
+function scheduleAnswer(p) {
+  const games = p.games || [];
+  const scope = p.scope || {};
+  if (!games.length) return scope.team ? `I couldn't find an upcoming ${esc(scope.team)} game.` : `No games found ${p.window === 'tomorrow' ? 'tomorrow' : 'for the rest of today'} in those leagues.`;
+  const rows = scannedRows();
+  const lean = g => {
+    const ml = rows.filter(r => r.event_id === g.event_id && r.market === 'h2h');
+    if (!ml.length) return '';
+    const fav = ml.reduce((a, b) => chance(b) > chance(a) ? b : a);
+    return ` · bot likes <b>${esc(nick(fav.outcome))}</b> ${pct(chance(fav), 0)}`;
+  };
+  const byLeague = {};
+  games.forEach(g => (byLeague[g.sport] ||= []).push(g));
+  return (scope.team ? `<b>${esc(scope.team)}</b>, next games:` : `<b>Games ${p.window === 'tomorrow' ? 'tomorrow' : 'today'}</b>:`) +
+    Object.entries(byLeague).map(([lg, gs]) => `<br><b>${esc(lg)}</b><ul>${gs.map(g => `<li>${esc(g.away)} @ ${esc(g.home)}, ${when(g.start)}${lean(g)}</li>`).join('')}</ul>`).join('') +
+    `<span class="muted small">Ask <i>best bet in the ${esc(nick((games[0] || {}).home || ''))} game</i> for picks.</span>`;
+}
+
+function resultAnswer(p) {
+  const b = (p.bets || [])[0] || {};
+  if (b.kind === 'player') {
+    const f = Object.values(b.forms || {}).filter(Boolean);
+    if (!f.length) return `I don't have ${esc(b.player)}'s recent games.`;
+    const g = f[0].recent[0];
+    return `<b>${esc(b.player)}</b>, last game (${esc(g.date)}, ${g.home ? 'vs' : '@'} ${esc(nick(g.opp))}): ` +
+      f.map(x => `${x.recent[0].value} ${esc(x.stat)}`).join(', ') + '.';
+  }
+  const r = p.result;
+  if (!r) return `I don't have a recent result for ${esc(b.team || 'that team')}.`;
+  return `<b>${esc(r.team)}</b> ${r.tie ? 'tied' : r.won ? 'won' : 'lost'} ${r.us}-${r.them} ${r.home ? 'vs' : 'at'} ${esc(r.opponent)} (${new Date(r.date).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}).` +
+    (b.event ? ` Next: ${esc(b.event)}, ${when(b.start)}.` : '');
+}
+
+function winnerAnswer(bets) {
+  const ok = (bets || []).filter(b => !b.error && !b.problem).map(b => ({ b, ...chatRow(b) })).filter(x => x.row);
+  if (ok.length < 2) {
+    const b = (bets || [])[0] || {};
+    return botSay(b.error ? esc(b.error) : `I couldn't get both teams' chances for that game yet. Try again in a minute, or scan its league in Find bets.`, ['Who plays tonight?']);
+  }
+  const [a, c] = ok;
+  const fav = chance(a.row) >= chance(c.row) ? a : c, dog = fav === a ? c : a;
+  const val = x => x.row.ev != null ? x.row.ev : -1;
+  const better = val(a) >= val(c) ? a : c;
+  CHAT.last = fav.row;
+  const price = x => x.row.decimal ? ` at ${esc(x.row.american)}` : '';
+  botSay(`<b>The bot likes ${esc(fav.b.team)}</b> to win ${esc(fav.row.event)}: <b>${pct(chance(fav.row), 0)}</b> vs ${pct(chance(dog.row), 0)} for ${esc(dog.b.team)}.` +
+    `<br>${better === fav ? `It's also the better value${price(fav)} (${signed(fav.row.ev)}).` : `But the better value is <b>${esc(better.b.team)}</b>${price(better)} (${signed(better.row.ev)}): FanDuel's price on ${esc(fav.b.team)}${price(fav)} is ${fav.row.ev < 0 ? 'too steep' : 'thinner'}.`}` +
+    `<br><span class="muted small">${pct(1 - chance(fav.row), 0)} of the time the other team wins: nothing is certain.</span>`, ['Why?', 'How much should I bet?', 'What about the other side?']);
 }
 
 function helpText() {
@@ -222,6 +299,18 @@ function chatRow(bet) {
   if (bet.stats && !(k in STATS.known)) STATS.known[k] = bet.stats;
   if (bet.injury) { INJ.known[k] = bet.injury; Object.assign(INJ.teams, bet.injury_teams || {}); Object.assign(INJ.updated, bet.injury_updated || {}); }
   return { row, based };
+}
+
+// A plain answer first: Yes / Lean yes / Not really / No, from the verdict and any injury.
+function yesNo(row, tone, title) {
+  const inj = (INJ.known[statKey(row)] || {}).player;
+  if (inj && inj.level === 'out') return ['bad', 'No', `${inj.name} is listed out`];
+  if (!row.decimal) return ['ok', 'Can\'t say yet', 'I need the odds'];
+  if (title === 'Strong value') return ['good', 'Yes', 'good value at this price'];
+  if (title === 'Value pick') return ['good', 'Yes, a small edge', 'slightly good value'];
+  if (/Possible value|Slight value/.test(title)) return ['ok', 'Lean yes', 'some value, but a rough estimate'];
+  if (title === 'About a fair price') return ['ok', 'Not really', 'no edge at this price'];
+  return ['bad', 'No', 'the price pays less than the bet is worth'];
 }
 
 function verdictOf(row) {
@@ -271,9 +360,11 @@ function checkAnswer(bet, stakeToo) {
   if (inj) extra.push(`<span class="inj ${inj.level}">⚠ ${esc(inj.name)}: ${esc(inj.status)}</span> ${esc(inj.comment || '')}`);
   else if (!bet.player && bet.injury_teams) extra.push(teamInjuries(bet));
   if (row.decimal) extra.push(stakeSuggestion(row).text);
+  const yn = yesNo(row, tone, title);
   const html = `
     <div class="cbet">
       <b>${esc(betLabel(row))}</b><span class="muted small">${esc(row.event)}, ${when(row.start)}</span>
+      <div class="cyes ${yn[0]}"><b>${esc(yn[1])}</b> — ${esc(yn[2])}.</div>
       <div class="cverdict ${tone}"><b>${esc(title)}.</b> ${esc(line)}</div>
       <div class="cnums">
         <div><b>${pct(ch, 0)}</b>chance</div>
@@ -376,6 +467,7 @@ function injuryAnswer(bet) {
 function aboutAnswer(bet) {
   if (!bet) return helpText();
   const parts = [];
+  if (bet.yesno) parts.push(`<b>Can't say yet</b> — which bet on ${esc(bet.player || bet.team)}? Tell me the stat and line, like <i>${esc(bet.player || '')} over 20.5 points −115</i>, or ask <i>best bet for ${esc(bet.player || '')}</i>.`);
   if (bet.event) parts.push(`Next game: <b>${esc(bet.event)}</b>, ${when(bet.start)}.`);
   else if (bet.error) parts.push(esc(bet.error));
   const inj = injuryAnswer(bet);
@@ -466,6 +558,9 @@ function moreAnswer() {
     left > 0 ? ['Show more', 'Check a bet'] : ['Safest bets tonight', 'Check a bet']);
 }
 
+const nameKey = n => (n || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z ]/g, '').replace(/ (jr|sr|ii|iii|iv)$/, '').trim();
+const sameTeam = (a, b) => !!a && !!b && (a.toLowerCase() === b.toLowerCase() || a.toLowerCase().split(' ').pop() === b.toLowerCase().split(' ').pop());
+
 async function bestAnswer(p) {
   const now = new Date().toISOString();
   // which leagues: the ones asked for, else what's scanned, else popular ones in season
@@ -473,8 +568,11 @@ async function bestAnswer(p) {
   let leagues = p.sports && p.sports.length ? p.sports : scanned.length ? scanned
     : POPULAR_LEAGUES.filter(k => !state.cfg.rundown_sports || state.cfg.rundown_sports.includes(k));
   if (p.event_id) leagues = [...new Set(scannedRows().filter(r => r.event_id === p.event_id).map(r => r.sport_key))];
+  const scope = p.scope && (p.scope.team || p.scope.player) ? p.scope : null;
+  if (scope && scope.sport_key) leagues = [scope.sport_key];
   // refresh old or missing main lines for free, so answers use today's prices
-  const stale = leagues.filter(k => !state.results[k] || Date.now() - state.results[k].at > FRESH_MINUTES * 60000);
+  const stale = (p.props || (scope && scope.player)) ? []
+    : leagues.filter(k => !state.results[k] || Date.now() - state.results[k].at > FRESH_MINUTES * 60000);
   let refreshed = false;
   if (stale.length && state.cfg.rundown && !state.cfg.demo && !p.event_id) {
     const wait = addMsg('bot typing', `Getting fresh ${stale.map(leagueName).join(', ')} odds (free)…`);
@@ -487,7 +585,23 @@ async function bestAnswer(p) {
   let rows = (p.here && state.shown && state.shown.length ? state.shown : scannedRows())
     .filter(r => r.start > now && leagues.includes(r.sport_key) && inWindow(r, p.window));
   if (p.event_id) rows = rows.filter(r => r.event_id === p.event_id);
-  const what = `${leagues.length && leagues.length <= 3 ? leagues.map(leagueName).join(', ') + ' ' : ''}${p.props ? 'player props' : 'bets'}${p.window === 'today' ? ' tonight' : p.window === 'tomorrow' ? ' tomorrow' : ''}`;
+  let what = `${leagues.length && leagues.length <= 3 ? leagues.map(leagueName).join(', ') + ' ' : ''}${p.props ? 'player props' : 'bets'}${p.window === 'today' ? ' tonight' : p.window === 'tomorrow' ? ' tomorrow' : ''}`;
+  if (scope && scope.player) {
+    const k = nameKey(scope.player);
+    rows = rows.filter(r => r.player && nameKey(r.player) === k);
+    what = `${scope.player} props`;
+    if (!rows.length) {
+      const f = formAnswer(Object.assign({ kind: 'player' }, scope), true);
+      return botSay(`I don't have ${esc(scope.player)}'s props scanned${scope.event ? ` for ${esc(scope.event)}, ${when(scope.start)}` : ''}, so I can't say which one is best yet. Props come from The Odds API (about 4 credits for the game): open <b>More bets</b>, pick that game and its player props, then ask again.` +
+        (f ? `<br>${f}` : '') + `<br>Or give me a line to check now, like <i>${esc(scope.player)} over 20.5 points −115</i>.`, ['Safest bets tonight', 'Check a bet']);
+    }
+  } else if (scope && scope.team) {
+    rows = rows.filter(r => scope.event_id
+      ? r.event_id === scope.event_id || (sameTeam(r.home_team, scope.home) && sameTeam(r.away_team, scope.away))
+      : sameTeam(r.home_team, scope.team) || sameTeam(r.away_team, scope.team));
+    what = scope.event ? `bets in ${scope.event}` : `${scope.team} bets`;
+    if (!rows.length) return botSay(scope.error ? esc(scope.error) : `I don't have odds for ${esc(scope.event || scope.team + "'s next game")} yet. Scan its league in Find bets, then ask again.`, ['Who plays tonight?', 'Check a bet']);
+  }
   if (p.props) {
     rows = rows.filter(r => r.player);
     if (!rows.length) {

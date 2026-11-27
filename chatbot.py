@@ -417,7 +417,34 @@ AGREE = r"\b(both agree|agree|best (value )?and (most )?likely|value and likely)
 RECOMMEND = (r"what (should|can|do) i (bet|take|play|pick)( on)?\b", r"what (do|would) (you|u) (recommend|bet|take|play|pick|like)",
              r"\bgive me (a|some|any|your)? ?(pick|bet|play)s?\b", r"\b(any|some) good (bets?|picks?|plays?)\b",
              r"\bwhat('?s| is) good\b", r"\bwhat to (bet|play)\b", r"\b(recommend|suggest)\b", r"\b(your|ur) (best|top) (pick|bet|play)\b",
-             r"\bpick (one|something) for me\b", r"\bwhat('?s| is) the (best|top) (bet|pick|play)\b")
+             r"\bpick (one|something) for me\b", r"\b(any )?suggestions?\b", r"\bwhat('?s| is) the (best|top) (bet|pick|play)\b")
+
+
+YESNO = r"\b(should i|shall i|is it (a )?(good|smart|safe|bad|wise)|good (idea|bet|pick|play)|bad (idea|bet)|worth (it|a bet|betting|taking)|would (you|u)|do (you|u) (like|think)|smart (bet|play|to)|safe (bet|to)|lock\b|hit\?|will (it|he|they) hit|take (it|this|that)\?)"
+SMALLTALK = [
+    ("how", r"\bhow (are|r) (you|u)\b|\bhow('?s| is) it going\b|\bwhat'?s up\b|\bwyd\b"),
+    ("who", r"\bwho (are|r) (you|u)\b|\bwhat (are|r) (you|u)\b|\byour name\b|\bwhat'?s your name\b"),
+    ("laugh", r"^(lol|lmao|haha+|hehe|bruh|damn|wow|omg|nice one|crazy|sheesh|bet)\b"),
+    ("bye", r"^(bye|goodbye|see (you|ya)|later|gn|good ?night|night)\b"),
+    ("morning", r"^(good )?(morning|afternoon|evening)\b"),
+    ("smart", r"\b(you'?re|ur|you are) (dumb|stupid|useless|bad|trash|smart|great|good|the best|amazing)\b|\b(dumb|stupid) (bot|chat)\b"),
+]
+FAQ = [
+    ("losing", r"\b(i('?m| am)? (keep )?(losing|lost|down bad)|chasing|can'?t stop|lost (all|everything|a lot)|addicted|gambling problem)\b"),
+    ("how_work", r"\bhow (do|does) (you|u|the bot|this|it) (work|pick|choose|decide|find|know)\b|\bwhere do (you|u) get\b|\bhow do you make picks\b"),
+    ("win", r"\bhow (do|can|to) (i )?(win|make money|be profitable|beat the books?)\b|\b(tips|strategy|advice)\b|\bhow to bet\b"),
+    ("parlays", r"\b(are|is) parlays? (good|worth|bad|smart)\b|\bshould i (do|bet|play|make) (a )?parlays?\b|\bparlays? (worth|good|bad)\b"),
+    ("bankroll_size", r"\bhow much (should|to|do) i (start|deposit|put in|have)\b|\bbankroll (size|should)\b|\bhow big\b.*\bbankroll\b"),
+    ("worth", r"\bis (sports )?betting (worth|good|smart|a good idea)\b|\bcan (you|u|i) (really )?(win|make money) (betting|long term)\b"),
+    ("live", r"\b(live bet|live betting|in.?game|during the game)\b"),
+    ("other_books", r"\b(draftkings|betmgm|caesars|bet365|espn ?bet|other (apps|books|sportsbooks))\b"),
+    ("props_vs_lines", r"\b(props? or (game )?lines|lines or props|which is better props)\b"),
+    ("units_size", r"\bhow much (is|should) (a|one) unit\b"),
+    ("news", r"\bnews\b|\bheadlines?\b|\bwhat('?s| is) (new|happening)\b|\brumou?rs?\b|\btrades?\b"),
+]
+SCHEDULE = r"\b(when (do|does|is|are|will)|what time|schedule|who (plays|is playing|are playing)|games? (on )?(tonight|today|tomorrow)|what games|next game|play(ing)? next|who'?s playing)\b"
+RESULT = r"\b(did\b.*\b(win|lose|lost|won)|who won|final score|score of|last game|last night|how did\b.*\b(do|play)|result)\b"
+WINNER = r"\b(who (will|wins|is going to win|would win|you got|ya got)|who('?s| is) (gonna|going to) win|predict(ion)?|who do (you|u) (like|have|got|think)|winner of|win (tonight|this game))\b"
 
 
 def list_request(text):
@@ -449,6 +476,12 @@ def parse(message, context=None):
         return dict(out, intent="checkhelp")
     if _has(text, r"\b(can|could|will) (you|u) (talk|chat|speak)\b", r"\btalk to me\b", r"\bare (you|u) (there|real|a bot|an ai)\b"):
         return dict(out, intent="talk")
+    for topic, pat in FAQ:
+        if re.search(pat, text) and not SIDE_LINE.search(text):
+            return dict(out, intent="faq", topic=topic)
+    for topic, pat in SMALLTALK:
+        if re.search(pat, text):
+            return dict(out, intent="smalltalk", topic=topic)
     # a betting term?
     m = re.search(r"\b(what('?s| is| are| does)|explain|define|meaning of|mean)\b", text)
     if m and ODDS.search(text) and not find_teams(text) and not find_player(text)[0]:
@@ -471,7 +504,7 @@ def parse(message, context=None):
     if re.fullmatch(r"(show |give me |any )?(more|next|next ones?|next page|others|other ones|more please|anything else|what else|keep going)\??", text):
         return dict(out, intent="more")
     if _has(text, *RECOMMEND) and not SIDE_LINE.search(text) and not ODDS.search(text):
-        return dict(out, intent="best", here=False, **list_request(text))
+        return dict(out, intent="best", here=False, scope=_scope(read_bet(text, out["sports"] or None)), **list_request(text))
     stake = _has(text, r"how much (should|to|do) i (bet|wager|put)", r"\b(stake|bet size|how much on)\b")
     if _has(text, r"^(why|how come|why not|explain( that| it| this)?|reasons?|what makes (it|that))\b\??$"):
         return dict(out, intent="why")                           # the page answers about the last bet, or asks for one
@@ -501,6 +534,20 @@ def parse(message, context=None):
         bet = follow_up(text, ctx) or bet
     if bet.get("kind") == "choose":
         return dict(out, intent="choose", bets=[bet])
+    if re.search(WINNER, text) and bet.get("kind") == "team" and bet.get("market") in (None, "h2h"):
+        return dict(out, intent="winner", bets=[dict(bet, market="h2h", outcome=bet["team"])])
+    if re.search(SCHEDULE, text) and not bet.get("market"):
+        return dict(out, intent="schedule", scope=_scope(bet), **list_request(text))
+    if re.search(RESULT, text) and bet.get("kind") in ("team", "player") and (
+            not bet.get("market") or (bet["market"] == "h2h" and not bet.get("odds"))):     # "did the Lakers win"
+        return dict(out, intent="result", bets=[bet])
+    yesno = bool(re.search(YESNO, text))
+    if yesno and bet.get("kind") == "team" and not bet.get("market"):
+        bet = dict(bet, market="h2h", outcome=bet["team"])         # "should I bet the Knicks": their moneyline
+    if yesno and bet.get("kind") == "player" and not bet.get("market"):
+        return dict(out, intent="about", bets=[dict(bet, yesno=True)])   # which prop? show form, ask for the line
+    if yesno and bet.get("market"):
+        bet["yesno"] = True
     if _has(text, r"\binjur", r"\bhurt\b", r"\bis \w+( \w+)? (playing|out|healthy|active)\b", r"\bstatus\b", r"\bplaying (tonight|today)\b"):
         if bet.get("kind"):
             return dict(out, intent="injury", bets=[bet])
@@ -515,14 +562,42 @@ def parse(message, context=None):
         return dict(out, intent="stake")
     if _has(text, r"\b(best|top|good|value|recommend|suggest|should i bet|what to bet|any (bets|picks|value))\b", r"\bpicks? (for )?(tonight|today|tomorrow)\b", r"\bbets? (tonight|today|tomorrow)\b",
             r"(?<!my )\bpicks?\b", r"\bany\b.*\b(bets?|props?|games?)\b", LIKELY, AGREE, *RECOMMEND) or (out["sports"] and not bet.get("kind")):
-        return dict(out, intent="best", here=bool(re.search(r"\b(here|these|on screen|this list)\b", text)), **list_request(text))
+        return dict(out, intent="best", here=bool(re.search(r"\b(here|these|on screen|this list)\b", text)),
+                    scope=_scope(bet), **list_request(text))
     if bet.get("kind") in ("team", "player"):
         return dict(out, intent="about", bets=[bet])        # just a name: form and injuries
     if _has(text, r"^(hi|hey|hello|yo|sup|help)\b", r"what can you do", r"\bhelp\b"):
         return dict(out, intent="help")
     if _has(text, r"^(thanks|thank you|thx|ty|cheers|cool|nice|great|ok|okay|got it|perfect)\b"):
         return dict(out, intent="thanks")
-    return dict(out, intent="unknown")
+    return dict(out, intent="unknown", suggestions=suggest(text))
+
+
+def _scope(bet):
+    """A team or player a request is about ("best bet in the Lakers game", "for LeBron")."""
+    if bet.get("kind") not in ("team", "player"):
+        return None
+    return {k: bet.get(k) for k in ("kind", "sport_key", "player", "team", "opponent")}
+
+
+def suggest(text):
+    """For a message nobody understood: the closest things it might mean (chip texts)."""
+    words = set(re.findall(r"[a-z]+", text))
+    out = []
+    if words & {"bet", "bets", "pick", "picks", "play", "plays", "value", "money", "odds", "line", "lines"}:
+        out += ["What should I bet on tonight?", "Check a bet"]
+    if words & {"game", "games", "tonight", "today", "tomorrow", "play", "schedule"}:
+        out.append("Who plays tonight?")
+    if words & {"me", "my", "i", "won", "lost", "profit", "record"}:
+        out.append("How am I doing?")
+    if words & {"bot", "accurate", "working", "results", "trust"}:
+        out.append("Is the bot working?")
+    if words & {"win", "tips", "strategy", "advice", "help"}:
+        out.append("Any tips?")
+    for c in ["What should I bet on tonight?", "Safest bets tonight", "Who plays tonight?", "Check a bet"]:
+        if c not in out:
+            out.append(c)
+    return out[:4]
 
 
 def log_unknown(message):
