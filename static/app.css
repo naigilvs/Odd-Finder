@@ -550,3 +550,13 @@
   .chat-form input { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; color: var(--chalk); font: 15px var(--body); }
   .chat-form .btn-scan { padding: 8px 16px; }
   @media (max-width: 700px) { .chat, .chat.full { inset: 0; width: 100vw; height: 100vh; border-radius: 0; } .cnums { grid-template-columns: repeat(3, 1fr); } }
+  /* Best value / Most likely to win tabs */
+  .sidetabs { display: flex; gap: 8px; margin: 4px 0 12px; flex-wrap: wrap; }
+  .sidetabs[hidden] { display: none; }
+  .sidetabs button { flex: 1 1 220px; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+                     padding: 10px 14px; color: var(--chalk); font: 700 18px var(--display); cursor: pointer; }
+  .sidetabs button small { display: block; font: 400 13px var(--body); color: var(--slate); margin-top: 2px; }
+  .sidetabs button[aria-selected="true"] { border-color: var(--amber); background: var(--panel-2); box-shadow: inset 0 -3px 0 var(--amber); }
+  .poorprice { display: inline-block; margin: 5px 0 0 6px; font: normal 600 12px var(--body); color: var(--ink); background: var(--amber); border-radius: 4px; padding: 1px 7px; }
+  .what .poorprice:first-of-type { margin-left: 0; }
+  .agree + .poorprice, .inj + .poorprice { margin-left: 6px; }

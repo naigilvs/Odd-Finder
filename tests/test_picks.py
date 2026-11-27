@@ -362,6 +362,10 @@ class BotSide(unittest.TestCase):
         likely = picks.track_summary(bets, view="likely")
         self.assertEqual((likely["view"], likely["all"]["wins"], likely["all"]["losses"]), ("likely", 1, 0))
         self.assertEqual(picks.track_summary(bets, view="side")["all"]["losses"], 1)
+        self.assertEqual(picks.track_summary(bets, view="agree")["tracked"], 0)        # pick and favorite differ
+        both = bets + [s("Home", "won", 0.02, 0.6, None, "h2h", "g8"), s("Away", "lost", -0.05, 0.4, None, "h2h", "g8")]
+        agree = picks.track_summary(both, view="agree")
+        self.assertEqual((agree["view"], agree["tracked"], agree["all"]["wins"]), ("agree", 1, 1))
 
     def test_views(self):
         side = picks.track_summary(self.bets(), view="side")

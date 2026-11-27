@@ -88,6 +88,10 @@
       <div class="toppick" id="toppick" role="button" tabindex="0" aria-label="Show details for the best value bet" hidden></div>
       <div class="nopicks" id="noPicks" role="status" hidden></div>
 
+      <div class="sidetabs" id="sideTabs" role="tablist" aria-label="Which side of each bet to show" hidden>
+        <button type="button" role="tab" data-side="value" aria-selected="true">Best value<small>The better deal at FanDuel's price</small></button>
+        <button type="button" role="tab" data-side="likely" aria-selected="false">Most likely to win<small>The side the bot thinks will win</small></button>
+      </div>
       <div class="filters" id="filters" hidden>
         <label>Bet type<select id="fMarket"></select></label>
         <label>Min. chance of success %<input id="fProb" type="number" min="0" max="100" value="0"></label>
@@ -108,6 +112,7 @@
         </label>
         <label>Books needed<input id="minBooks" type="number" min="1" max="9" value="3" title="Only show bets at least this many other sportsbooks also offer"></label>
         <label class="check"><input type="checkbox" id="fAgree"> Only when stats agree</label>
+        <label class="check" title="Only bets where the best-value side is also the side most likely to win"><input type="checkbox" id="fBoth"> Only when best value and most likely agree</label>
         <span class="shown" id="shown"></span>
       </div>
 
@@ -142,6 +147,10 @@
       </div>
       <div class="status" id="mStatus" role="status"></div>
 
+      <div class="sidetabs" id="mSideTabs" role="tablist" aria-label="Which side of each bet to show" hidden>
+        <button type="button" role="tab" data-side="value" aria-selected="true">Best value<small>The better deal at FanDuel's price</small></button>
+        <button type="button" role="tab" data-side="likely" aria-selected="false">Most likely to win<small>The side the bot thinks will win</small></button>
+      </div>
       <div class="filters" id="mFilters" hidden>
         <label>League<select id="mfLeague"></select></label>
         <label>Game<select id="mfGame"></select></label>
@@ -162,7 +171,7 @@
             <option value="start">Starting soonest</option>
           </select>
         </label>
-        <label class="check" title="Alternate lines: show only the best-value number for each bet"><input type="checkbox" id="mfBest" checked> Best line per bet only</label>
+        <label class="check" title="Alternate lines: show only the best-value number for each bet"><input type="checkbox" id="mfBest" checked> One pick per bet (best line, one side)</label>
         <button class="linkbtn" id="mClear">Clear results</button>
         <span class="shown" id="mShown"></span>
       </div>
@@ -256,6 +265,7 @@
           <select id="bView">
             <option value="side" selected>Bot's pick: the better-value side of each bet</option>
             <option value="likely">Bot's favorite: the side it thinks is most likely to win</option>
+            <option value="agree">Pick and favorite agree: the better value is also the likelier side</option>
             <option value="value">Value bets only: bets priced better than their chance</option>
             <option value="all">Both sides of every bet (always about 50%)</option>
           </select>

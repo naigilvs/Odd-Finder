@@ -101,6 +101,15 @@ For the NBA, NHL and NFL the page checks ESPN's free injury report (refreshed at
 
 The bot results tracker also keeps each bet's **starting price** (the odds when the bot first saw it) next to the latest one, so line movement and closing prices can be measured once a few weeks of data have built up.
 
+## Best value / Most likely to win
+
+Find bets and More bets show **one side per bet** (not both the Over and the Under), chosen by the tab above the list:
+
+- **Best value** (default): the side that's the better deal at FanDuel's price, sorted by value.
+- **Most likely to win:** the side the bot gives the higher chance of success, sorted by chance. Bets whose price pays less than their chance is worth get a **⚠ Poor price** tag: likely to win, but losing money over many bets.
+
+The **Only when best value and most likely agree** filter keeps only bets where both tabs choose the same side. Each bet's pop-up lists the **other side** (tap to open it), and both sides are still tracked in Bot results, which has a matching **Pick and favorite agree** option. In More bets, **One pick per bet** keeps the best line and one side of each bet.
+
 ## No qualifying picks
 When none of the bets scanned in the current tab has positive value with at least medium confidence, Find bets says **No qualifying picks right now** above the list. The list still shows everything, best value first; sitting out is a fine choice.
 

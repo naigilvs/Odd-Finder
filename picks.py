@@ -478,6 +478,9 @@ def track_summary(bets, since=None, view="side"):
     check = side_check([b for b in sel if b["status"] in ("won", "lost", "push")])
     if view == "likely":
         sel = bot_sides(sel, by="chance")
+    elif view == "agree":                      # the bot's pick and its favorite are the same side
+        favs = {id(b) for b in bot_sides(sel, by="chance")}
+        sel = [b for b in bot_sides(sel) if id(b) in favs]
     elif view == "side":
         sel = bot_sides(sel)
     elif view == "value":
@@ -498,9 +501,9 @@ def track_summary(bets, since=None, view="side"):
             calibration.append(dict(_block(g), name=f"{round(lo * 100)}–{min(round(hi * 100), 100)}%"))
     recent = sorted(done, key=lambda b: b["start"], reverse=True)[:60]
     return {
-        "view": view if view in ("likely", "side", "value") else "all", "side_check": check,
+        "view": view if view in ("likely", "side", "value", "agree") else "all", "side_check": check,
         "clv": [b for b in (_clv_block([b for b in sel if first_value(b) > 0], "Good value when first seen"),
-                            _clv_block(sel, {"likely": "Bot's favorites", "side": "Bot's picks",
+                            _clv_block(sel, {"likely": "Bot's favorites", "side": "Bot's picks", "agree": "Pick and favorite agree",
                                              "value": "Value bets",
                                              "all": "Both sides of every bet"}.get(view, "Both sides of every bet")))],
         "tracked": len(sel), "pending": len(sel) - len(done), "settled": len(done),

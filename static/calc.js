@@ -76,6 +76,33 @@
     });
   }
 
+  // ---- one side per bet
+  // Every side and line of one bet share a key: LeBron Over and Under 24.5 (and 26.5),
+  // Knicks -4.5 and Celtics +4.5, all three outcomes of a soccer moneyline.
+  function betGroup(r) {
+    const base = r.market.replace(/^alternate_/, '');
+    return [r.event_id, base, r.player || '', r.team_total_for || ''].join('|');
+  }
+
+  // One row per bet: the best-value side ("value": value first, chance to break ties) or the
+  // side most likely to win ("likely": chance first). Each kept row gets `agree`: true when
+  // both ways choose it. `chanceOf` is the page's chance of success (market + stats).
+  function pickSides(rows, mode, chanceOf) {
+    const groups = new Map();
+    for (const r of rows) {
+      const k = betGroup(r);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(r);
+    }
+    const best = (g, first, second) => g.reduce((a, b) => (first(b) > first(a) || (first(b) === first(a) && second(b) > second(a))) ? b : a);
+    const ev = r => r.ev, ch = r => chanceOf(r);
+    return [...groups.values()].map(g => {
+      const byValue = best(g, ev, ch), byChance = best(g, ch, ev);
+      const keep = mode === 'likely' ? byChance : byValue;
+      return Object.assign({}, keep, { agree_sides: byValue === byChance });
+    });
+  }
+
   // ---- saved picks
   // Profit on one pick at a given stake (a push returns the stake: 0 profit).
   function pickProfit(p, stake) {
@@ -230,7 +257,7 @@
     return out;
   }
 
-  const api = { MARKET_WEIGHT, chance, agrees, confidence, CONF_RANK, betLabel, americanOdds, lineGroup, bestLines,
+  const api = { MARKET_WEIGHT, chance, agrees, confidence, CONF_RANK, betLabel, americanOdds, lineGroup, bestLines, betGroup, pickSides,
                 pickProfit, summarize, winFromOdds, parlayDecimal, parlayResult, wagerNet, wagerSummary,
                 balance, balanceHistory, kellyStake, bankrollWarnings };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

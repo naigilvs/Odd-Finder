@@ -187,3 +187,21 @@ test('bankroll: limit warnings', () => {
   assert.match(exp[0], /\$55 waiting on pending bets, more than 10% of your \$500/);
   assert.deepEqual(Calc.bankrollWarnings([w('pending', 100)], [], { ...S, max_stake: 0, exposure_pct: 0 }, '2026-11-25'), []);  // limits off
 });
+
+test('one side per bet: best value or most likely to win', () => {
+  const side = (outcome, ev, ch, extra = {}) => bet({ market: 'player_points', player: 'P', outcome, point: 24.5,
+    selection: `P ${outcome} 24.5`, ev, fair_prob: ch, ...extra });
+  const rows = [side('Over', 0.03, 0.42), side('Under', -0.06, 0.58),                       // value and chance split
+                bet({ market: 'h2h', outcome: 'Lakers', selection: 'Lakers', point: null, ev: 0.01, fair_prob: 0.6 }),
+                bet({ market: 'h2h', outcome: 'Celtics', selection: 'Celtics', point: null, ev: -0.05, fair_prob: 0.4 }),
+                side('Over', 0.01, 0.40, { market: 'alternate_player_points', point: 26.5, selection: 'P Over 26.5' })];
+  const ch = r => r.fair_prob;
+  const value = Calc.pickSides(rows, 'value', ch), likely = Calc.pickSides(rows, 'likely', ch);
+  assert.equal(value.length, 2);                                  // one per bet (alt line joins its bet)
+  assert.deepEqual(value.map(r => r.selection).sort(), ['Lakers', 'P Over 24.5']);
+  assert.deepEqual(likely.map(r => r.selection).sort(), ['Lakers', 'P Under 24.5']);
+  const lakers = value.find(r => r.selection === 'Lakers');
+  assert.equal(lakers.agree_sides, true);                         // best value and likelier agree
+  assert.equal(value.find(r => r.player).agree_sides, false);
+  assert.equal(Calc.betGroup(rows[0]), Calc.betGroup(rows[4]));
+});

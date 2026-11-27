@@ -22,7 +22,19 @@ const state = {
   cfg: null, book: null, sports: [], groupOf: {}, tab: 'all',
   picked: new Set(),          // leagues ticked for scanning
   results: {},                // sport_key -> { rows, at }
+  sideTab: localStorage.getItem('oddfinder.sideTab') === 'likely' ? 'likely' : 'value',   // Best value / Most likely to win
 };
+
+// One side per bet: the best-value side, or the side most likely to win (the tabs above the lists).
+const pickSides = rows => Calc.pickSides(rows, state.sideTab, chance);
+function setSideTab(side) {
+  state.sideTab = side;
+  localStorage.setItem('oddfinder.sideTab', side);
+  document.querySelectorAll('.sidetabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.side === side)));
+  $('#sort').value = $('#mfSort').value = side === 'likely' ? 'chance' : 'ev';
+  renderResults();
+  if (!$('#moreView').hidden) renderMore();
+}
 
 async function getJSON(url) {
   const r = await fetch(url);
@@ -194,8 +206,8 @@ function showCredits(q, rd) {
 function filtered() {
   const m = $('#fMarket').value, minP = +$('#fProb').value / 100, minEv = +$('#fEv').value / 100;
   const minBooks = +$('#minBooks').value || 1, key = $('#sort').value;
-  return rowsInTab()
-    .filter(r => (!m || r.market_label === m) && chance(r) >= minP && r.ev >= minEv && r.books_used.length >= minBooks
+  return pickSides(rowsInTab())
+    .filter(r => (!$('#fBoth').checked || r.agree_sides) && (!m || r.market_label === m) && chance(r) >= minP && r.ev >= minEv && r.books_used.length >= minBooks
       && (!$('#fAgree').checked || agrees(r))
       && (!$('#fConf').value || CONF_RANK[confidence(r).level] >= CONF_RANK[$('#fConf').value]))
     .sort((a, b) => key === 'start' ? a.start.localeCompare(b.start)
@@ -244,18 +256,20 @@ function renderResults(fresh) {
   }
   $('#shown').textContent = list.length ? `Showing ${Math.min(list.length, 300)} of ${list.length}` : '';
   // Say when filters hide bets (e.g. player props offered by only 1-2 other books), with a way to show them.
-  const hiddenByFilters = all.length - list.length;
+  $('#sideTabs').hidden = !all.length;
+  const picked = pickSides(all);                    // one side per bet, before the filters
+  const hiddenByFilters = picked.length - list.length;
   const note = $('#filterNote');
   note.hidden = !hiddenByFilters;
   if (hiddenByFilters) {
     const books = +$('#minBooks').value || 1;
-    const fewBooks = all.filter(r => r.books_used.length < books).length;
+    const fewBooks = picked.filter(r => r.books_used.length < books).length;
     note.innerHTML = `${hiddenByFilters} bet${hiddenByFilters > 1 ? 's are' : ' is'} hidden by your filters` +
       (fewBooks ? `, including ${fewBooks} offered by fewer than ${books} other sportsbooks (often player props)` : '') +
       `. <button class="linkbtn" id="showAll">Show all</button>`;
     $('#showAll').onclick = () => {
       $('#fMarket').value = ''; $('#fProb').value = 0; $('#fEv').value = -100; $('#minBooks').value = 1;
-      $('#fConf').value = ''; $('#fAgree').checked = false;
+      $('#fConf').value = ''; $('#fAgree').checked = false; $('#fBoth').checked = false;
       renderResults();
     };
   }
@@ -308,7 +322,8 @@ function betRow(r, i, which) {
   return `
     <div class="bet" data-list="${which}" data-i="${i}" role="button" tabindex="0" aria-label="Show details for ${esc(betLabel(r))}">
       <div class="rank">${i + 1}${starButton(r)}</div>
-      <div class="what">${avatarFor(r)}<div><b>${esc(betLabel(r))}</b><span>${esc(r.event)}</span>${formLine(r)}${r.others && r.others.length ? `<span class="more-lines">+${r.others.length} other line${r.others.length > 1 ? 's' : ''} for this bet</span>` : ''}${agrees(r) ? '<em class="agree">Market + stats agree</em>' : ''}${injTag(r)}</div></div>
+      <div class="what">${avatarFor(r)}<div><b>${esc(betLabel(r))}</b><span>${esc(r.event)}</span>${formLine(r)}${r.others && r.others.length ? `<span class="more-lines">+${r.others.length} other line${r.others.length > 1 ? 's' : ''} for this bet</span>` : ''}${agrees(r) ? '<em class="agree">Market + stats agree</em>' : ''}${injTag(r)}${state.sideTab === 'likely' && r.ev < 0
+        ? `<em class="poorprice" title="Likely to win, but FanDuel's price pays less than the chance is worth: about ${money(-r.ev * 100)} lost per $100 over many bets like this">⚠ Poor price</em>` : ''}</div></div>
       <div class="type">${esc(r.market_label)}<span class="when">${esc(r.sport)}, ${when(r.start)}</span></div>
       <div class="odds">${r.american}<small>${r.decimal.toFixed(2)}</small></div>
       <div class="probs" title="Compared with ${esc(r.books_used.join(', '))}">
@@ -545,6 +560,8 @@ function renderAll(fresh) {
 /* ---------------- boot ---------------- */
 async function init() {
   state.cfg = await getJSON('/api/config');
+  document.querySelectorAll('.sidetabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.side === state.sideTab)));
+  $('#sort').value = $('#mfSort').value = state.sideTab === 'likely' ? 'chance' : 'ev';
   if (state.cfg.rundown) {
     $('#sourceWrap').hidden = false;
     $('#source').value = localStorage.getItem('oddfinder.source') || 'therundown';
@@ -582,6 +599,11 @@ $('#changeBook').onclick = showStart;
 $('#home').onclick = e => { e.preventDefault(); showPage('find'); state.tab = 'all'; renderAll(); };
 ['#fMarket', '#fProb', '#fEv', '#sort', '#minBooks'].forEach(s => $(s).addEventListener('input', () => renderResults()));
 $('#fAgree').addEventListener('change', () => renderResults());
+$('#fBoth').addEventListener('change', () => renderResults());
+document.querySelectorAll('.sidetabs').forEach(t => t.addEventListener('click', e => {
+  const b = e.target.closest('button[data-side]');
+  if (b) setSideTab(b.dataset.side);
+}));
 $('#fConf').addEventListener('change', () => renderResults());
 $('#accBox').addEventListener('toggle', () => { if ($('#accBox').open) loadAccuracy(); });
 
@@ -670,6 +692,16 @@ function explain(r) {
   return { verdict, good, risk };
 }
 
+// The other sides of the same bet (the Under for an Over, the other team, the draw), from
+// everything scanned, best value first. Other lines of the same side are left to "Other lines".
+function otherSides(r) {
+  const g = Calc.betGroup(r);
+  const seen = new Set([r.selection]);
+  return Object.values(state.results).flatMap(v => v.rows).concat(more.rows)
+    .filter(x => Calc.betGroup(x) === g && x.outcome !== r.outcome && !seen.has(x.selection) && seen.add(x.selection))
+    .sort((a, b) => b.ev - a.ev).slice(0, 4);
+}
+
 function betDetails(r) {
   const book = state.book.name, s = statOf(r), hasStats = !!(s && s.prob != null);
   const c = confidence(r), ex = explain(r);
@@ -717,6 +749,17 @@ function betDetails(r) {
 
     ${injSection(r)}
 
+    ${(() => {
+      const os = otherSides(r);
+      return os.length ? `<h3>Other side${os.length > 1 ? 's' : ''} of this bet</h3>
+        <div class="lines">${os.map((o, i) => `
+          <button class="line oside" data-oside="${i}">
+            <span>${esc(betLabel(o))}</span><span class="o">${o.american}</span>
+            <span>${pct(chance(o), 0)}<small> chance</small></span>
+            <span class="${o.ev > 0 ? 'up' : 'down'}">${signed(o.ev)}<small> value</small></span>
+          </button>`).join('')}</div>` : '';
+    })()}
+
     <h3>How ${esc(book)}'s price compares</h3>
     ${cmp.length ? `<p>Higher odds pay more. The fair price is what the odds would be with every book's margin removed.</p>
       <div class="cmp">${rowsCmp.map(o => `
@@ -754,6 +797,8 @@ function openBet(r) {
   $('#betModal').showModal();
   $('#bmBody .close').onclick = () => $('#betModal').close();
   $('#bmAsk').onclick = () => askAboutBet(r);
+  const os = otherSides(r);
+  document.querySelectorAll('#bmBody .oside').forEach(b => b.onclick = () => { openBet(os[+b.dataset.oside]); $('#betModal').scrollTop = 0; });
   $('#bmSave').onclick = async () => {
     const stake = $('#bmStake') ? +$('#bmStake').value || null : null;
     await toggleSave(r, stake);
@@ -762,7 +807,7 @@ function openBet(r) {
     $('#betModal').scrollTop = top;
   };
   const lines = r.others ? [r, ...r.others] : [];
-  document.querySelectorAll('#bmBody .line').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#bmBody .line:not(.oside)').forEach(b => b.onclick = () => {
     const pick = lines[+b.dataset.line];
     if (pick !== r) openBet(Object.assign({}, pick, { others: lines.filter(x => x !== pick) }));
   });
@@ -895,6 +940,7 @@ function fillSelect(sel, items, allLabel) {   // items: [[value, label]]
 function renderMore() {
   const rows = more.rows;
   $('#mFilters').hidden = !rows.length;
+  $('#mSideTabs').hidden = !rows.length;
   const uniq = (arr) => [...new Map(arr.map(x => [x[0], x])).values()];
   fillSelect($('#mfLeague'), uniq(rows.map(r => [r.sport_key, r.sport])).sort((a, b) => a[1].localeCompare(b[1])), 'All leagues');
   const lg = $('#mfLeague').value;
@@ -913,7 +959,7 @@ function renderMore() {
       && (!who || [r.selection, r.player, r.team_total_for, r.pick_team].some(x => x && x.toLowerCase().includes(who)))
       && (!conf || CONF_RANK[confidence(r).level] >= CONF_RANK[conf]));
   // Alternate lines: show each bet's best-value line, with the others listed in its pop-up.
-  if ($('#mfBest').checked) list = Calc.bestLines(list);
+  if ($('#mfBest').checked) list = pickSides(Calc.bestLines(list));
   list.sort((a, b) => key === 'start' ? a.start.localeCompare(b.start)
       : key === 'chance' ? chance(b) - chance(a) : b.ev - a.ev);
 
@@ -1277,10 +1323,11 @@ function renderBot(s) {
   const luck = b => b.profit_lo == null ? '' : b.profit_lo > 0 ? '. Looks like more than luck'
     : b.profit_hi < 0 ? '. Losing by more than luck'
     : `. Too early to tell: likely range ${signedDollars(Math.round(b.profit_lo))} to ${signedDollars(Math.round(b.profit_hi))}`;
-  const what = { likely: "of the bot's favorites", side: "of the bot's picks", value: 'value bets', all: 'sides' }[s.view];
+  const what = { likely: "of the bot's favorites", side: "of the bot's picks", agree: 'bets where pick and favorite agree', value: 'value bets', all: 'sides' }[s.view];
   $('#bViewNote').innerHTML = {
     likely: "<b>Bot's favorite:</b> for each bet, only the side the bot gives the higher chance of winning (one pick per bet, even if the line moved). Shows how often the bot picks the winner.",
     side: "<b>Bot's pick:</b> for each bet, only the side with the better value, the one ranked higher in Find bets. It can be the less likely side at a good price, so judge it by profit more than win rate.",
+    agree: "<b>Pick and favorite agree:</b> only bets where the better-value side is also the side the bot thinks is most likely to win, like the \"Only when best value and most likely agree\" filter in Find bets.",
     value: "<b>Value bets only:</b> bets whose price was better than their chance of winning when the bot last saw them, the ones it would actually recommend. The real test of whether it makes money.",
     all: "<b>Both sides of every bet:</b> Over and Under, both teams. One side always wins, so the win rate sits near 50% by design; useful only for checking the bot's chances add up.",
   }[s.view];
