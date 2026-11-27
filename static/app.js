@@ -1277,9 +1277,10 @@ function renderBot(s) {
   const luck = b => b.profit_lo == null ? '' : b.profit_lo > 0 ? '. Looks like more than luck'
     : b.profit_hi < 0 ? '. Losing by more than luck'
     : `. Too early to tell: likely range ${signedDollars(Math.round(b.profit_lo))} to ${signedDollars(Math.round(b.profit_hi))}`;
-  const what = { side: "of the bot's sides", value: 'good-value bets', all: 'sides' }[s.view];
+  const what = { likely: 'of the likelier sides', side: 'of the better-value sides', value: 'good-value bets', all: 'sides' }[s.view];
   $('#bViewNote').innerHTML = {
-    side: "Counting only <b>the bot's side</b> of each bet: the side with the better value, the one ranked higher in Find bets. The other side is logged too, but left out here.",
+    likely: "Counting only <b>the side the bot thinks is most likely to win</b> in each bet (the higher chance of success; one pick per bet, even if the line moved). The other side is logged too, but left out here.",
+    side: "Counting only <b>the better-value side</b> of each bet: the one ranked higher in Find bets. It can be the less likely side at a good price, so judge it by profit more than win rate.",
     value: 'Counting only <b>good-value bets</b>: the ones whose price beat their chance of winning when the bot last saw them.',
     all: "Counting <b>every side logged</b>, both Over and Under, both teams. One side of each bet always wins, so the win rate here sits near 50% by design.",
   }[s.view];

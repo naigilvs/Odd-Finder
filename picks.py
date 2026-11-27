@@ -423,7 +423,7 @@ def side_key(b):
             abs(point) if point is not None else None)
 
 
-def bot_sides(bets):
+def bot_sides(bets, by="value"):
     """The bot's side of each bet: the one with the best value (the one ranked higher in Find
     bets), the higher chance of success if values tie. A bet is one game's total, spread or
     moneyline, or one player's stat: if the line moved between scans (Over 223.5, later Under
@@ -431,7 +431,10 @@ def bot_sides(bets):
     groups = {}
     for b in bets:
         groups.setdefault(side_key(b)[:4], []).append(b)          # every line and side of the bet
-    return [max(g, key=lambda b: (b.get("ev", 0), b.get("chance", b.get("fair_prob", 0)))) for g in groups.values()]
+    chance = lambda b: b.get("chance", b.get("fair_prob", 0))
+    if by == "chance":                         # the side the bot thinks is most likely to win
+        return [max(g, key=lambda b: (chance(b), b.get("ev", 0))) for g in groups.values()]
+    return [max(g, key=lambda b: (b.get("ev", 0), chance(b))) for g in groups.values()]
 
 
 def side_check(bets):
@@ -467,13 +470,15 @@ def side_check(bets):
     return out
 
 
-def track_summary(bets, since=None, view="side"):
+def track_summary(bets, since=None, view="likely"):
     """How the bot's predictions turned out, for bets starting on or after `since` (ISO time).
-    view: "side" counts only the bot's side of each bet, "value" only good-value bets,
-    "all" every side logged."""
+    view: "likely" counts only the side the bot thinks is most likely to win, "side" only the
+    side with the better value, "value" only good-value bets, "all" every side logged."""
     sel = [b for b in bets if not since or b["start"] >= since]
     check = side_check([b for b in sel if b["status"] in ("won", "lost", "push")])
-    if view == "side":
+    if view == "likely":
+        sel = bot_sides(sel, by="chance")
+    elif view == "side":
         sel = bot_sides(sel)
     elif view == "value":
         sel = [b for b in sel if b.get("ev", 0) > 0]
@@ -493,9 +498,10 @@ def track_summary(bets, since=None, view="side"):
             calibration.append(dict(_block(g), name=f"{round(lo * 100)}–{min(round(hi * 100), 100)}%"))
     recent = sorted(done, key=lambda b: b["start"], reverse=True)[:60]
     return {
-        "view": view if view in ("side", "value") else "all", "side_check": check,
+        "view": view if view in ("likely", "side", "value") else "all", "side_check": check,
         "clv": [b for b in (_clv_block([b for b in sel if first_value(b) > 0], "Good value when first seen"),
-                            _clv_block(sel, {"side": "The bot's side of each bet", "value": "Good-value bets",
+                            _clv_block(sel, {"likely": "The side most likely to win", "side": "The better-value side",
+                                             "value": "Good-value bets",
                                              "all": "Every side logged"}.get(view, "Every side logged")))],
         "tracked": len(sel), "pending": len(sel) - len(done), "settled": len(done),
         "all": _block(done),

@@ -1136,7 +1136,7 @@ class Handler(BaseHTTPRequestHandler):
         """Bot track record: log bets, summarize, check results, clear."""
         action = body.get("action", "summary")
         since = body.get("since") if isinstance(body.get("since"), str) else None
-        view = body.get("view") if body.get("view") in ("side", "value", "all") else "side"
+        view = body.get("view") if body.get("view") in ("likely", "side", "value", "all") else "likely"
         if action in ("log", "grade", "clear"):
             backup_soon()
         if action == "log":

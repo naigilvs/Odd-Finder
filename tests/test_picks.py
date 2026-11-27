@@ -353,6 +353,15 @@ class BotSide(unittest.TestCase):
         self.assertEqual([b["selection"] for b in picks.bot_sides(moved)], ["Over 223.5"])
         self.assertEqual(picks.side_check(moved)[0]["bets"], 2)                      # two lines, each a pair
 
+    def test_most_likely_side_can_differ_from_the_better_value_side(self):
+        s = self.side
+        bets = [s("Dog", "lost", 0.03, 0.40, None, "h2h", "g9"), s("Fav", "won", -0.04, 0.60, None, "h2h", "g9")]
+        self.assertEqual([b["selection"] for b in picks.bot_sides(bets, by="chance")], ["Fav"])
+        self.assertEqual([b["selection"] for b in picks.bot_sides(bets)], ["Dog"])
+        likely = picks.track_summary(bets)                                           # the default view
+        self.assertEqual((likely["view"], likely["all"]["wins"], likely["all"]["losses"]), ("likely", 1, 0))
+        self.assertEqual(picks.track_summary(bets, view="side")["all"]["losses"], 1)
+
     def test_views(self):
         side = picks.track_summary(self.bets(), view="side")
         self.assertEqual((side["view"], side["tracked"], side["settled"], side["pending"]), ("side", 5, 4, 1))
