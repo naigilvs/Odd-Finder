@@ -32,8 +32,8 @@ INDEX_SECONDS = 3600            # rebuild the name lists at most hourly
 
 # Stat words -> the market per sport. NBA and NHL both have "points".
 STATS = [
-    (r"\b(points?|pts|pt)\b", {"basketball_nba": "player_points", "icehockey_nhl": "player_points"}),
-    (r"\b(rebounds?|rebs?|boards)\b", {"basketball_nba": "player_rebounds"}),
+    (r"\b(points?|pts|pt|scoring)\b", {"basketball_nba": "player_points", "icehockey_nhl": "player_points"}),
+    (r"\b(rebounds?|rebounding|rebs?|boards)\b", {"basketball_nba": "player_rebounds"}),
     (r"\b(assists?|asts?|dimes)\b", {"basketball_nba": "player_assists"}),
     (r"\b(threes?|3s|3pm|3 ?pointers?|three ?pointers?|treys?)\b", {"basketball_nba": "player_threes"}),
     (r"\b(shots?( on goal)?|sog)\b", {"icehockey_nhl": "player_shots_on_goal"}),
@@ -451,7 +451,7 @@ CLOSEST = r"\b(closest|nearly fair|almost (fair|value)|close to (fair|value)|lea
 AGREE = r"\b(both agree|agree|best (value )?and (most )?likely|value and likely)\b"
 RECOMMEND = (r"what (should|can|do) i (bet|take|play|pick)( on)?\b", r"what (do|would) (you|u) (recommend|bet|take|play|pick|like)",
              r"\bgive me (a|some|any|your)? ?(pick|bet|play)s?\b", r"\b(any|some) good (bets?|picks?|plays?)\b",
-             r"\bwhat('?s| is) good\b", r"\bwhat to (bet|play)\b", r"\b(recommend|suggest)\b", r"\b(your|ur) (best|top) (pick|bet|play)\b",
+             r"\bwhat('?s| is) good\b", r"\bwhat to (bet|play)\b", r"\b(recommend\w*|suggest\w*)\b", r"\b(your|ur) (best|top) (pick|bet|play)\b",
              r"\bpick (one|something) for me\b", r"\b(any )?suggestions?\b", r"\bwhat('?s| is) the (best|top) (bet|pick|play)\b")
 
 
@@ -482,6 +482,19 @@ FAQ = [
 SCHEDULE = r"\b(when (do|does|is|are|will)|what time|schedule|who (plays|is playing|are playing)|games? (on )?(tonight|today|tomorrow)|what games|next game|play(ing)? next|who'?s playing)\b"
 RESULT = r"\b(did\b.*\b(win|lose|lost|won)|who won|final score|score of|last game|last night|how did\b.*\b(do|play)|result)\b"
 WINNER = r"\b(who (will|wins|is going to win|would win|you got|ya got)|who('?s| is) (gonna|going to) win|predict(ion)?|who do (you|u) (like|have|got|think)|winner of|win (tonight|this game))\b"
+
+
+STATSQ = (r"\b(stats?|statistics|averag\w*|numbers|game ?logs?|logs?|last \d+( games)?|last (night|game)|yesterday|"
+          r"best( \w+)? games?|best (performances?|nights?)|career|highs?|season|record|history|head to head|h2h|home record|away record|road record|"
+          r"how many|scored|scoring|this year|last year|game by game|box ?score|vs|versus|against)\b")
+
+
+def stats_request(text):
+    """Details of a stats question: how many recent games, which season, best games in a stat."""
+    m = re.search(r"\blast (\d+)", text)
+    n = min(int(m.group(1)), 40) if m else (1 if re.search(r"\blast (night|game)\b|\byesterday\b", text) else 10)
+    best = next((mk for pat, mk in STATS if re.search(pat, text)), None) if re.search(r"\b(best|top|highs?|career|most)\b", text) else None
+    return {"n": n, "best": best, "log": bool(m or re.search(r"\b(game ?logs?|logs?|game by game|each game|per game stats|box ?score)\b", text))}
 
 
 def list_request(text):
@@ -571,6 +584,27 @@ def parse(message, context=None):
         bet = follow_up(text, ctx) or bet
     if bet.get("kind") == "choose":
         return dict(out, intent="choose", bets=[bet])
+    # stats: a player's or team's past games ("LeBron stats", "Lakers last 10", "Lakers vs Celtics history")
+    if (bet.get("kind") in ("team", "player") and bet.get("point") is None and not bet.get("odds")
+            and re.search(STATSQ, text) and not re.search(WINNER, text) and not re.search(SCHEDULE, text)
+            and not (bet.get("kind") == "team" and re.search(RESULT, text) and not re.search(r"\blast \d+", text))):
+        req = stats_request(text)
+        pl, _ = find_player(text)
+        if pl and bet.get("kind") == "team":                       # "LeBron vs Celtics": the player, against that team
+            opp = next((t for sp, t in find_teams(text) if not stats.same_team_strict(t, pl["team"])), None)
+            bet = {"kind": "player", "sport_key": pl["sport"], "player": pl["name"], "team": pl["team"], "opponent": opp}
+        elif bet.get("kind") == "team" and bet.get("opponent"):   # keep the order typed: "Lakers vs Celtics"
+            first = lambda t: min((text.find(a) for a in team_aliases(t, bet["sport_key"]) if text.find(a) >= 0), default=999)
+            if first(bet["opponent"]) < first(bet["team"]):
+                bet = dict(bet, team=bet["opponent"], opponent=bet["team"])
+        best = req["best"]
+        if bet.get("kind") == "player" and re.search(r"\b(best|top|highs?|career|most)\b", text):
+            mk = (best or {}).get(bet["sport_key"]) if isinstance(best, dict) else None
+            cfg = props_stats.SPORTS.get(bet["sport_key"], {})
+            best = cfg.get("markets", {}).get(mk) or next(iter(cfg.get("labels", {})), None)
+        else:
+            best = None
+        return dict(out, intent="stats", bets=[dict(bet, market=None)], n=req["n"], best=best, log=req["log"])
     if re.search(WINNER, text) and bet.get("kind") == "team" and bet.get("market") in (None, "h2h"):
         return dict(out, intent="winner", bets=[dict(bet, market="h2h", outcome=bet["team"])])
     if re.search(SCHEDULE, text) and not bet.get("market"):
@@ -704,3 +738,131 @@ def team_form(sport, team):
                      "score": f"{us:g}-{them:g}", "result": res})
     return {"record": f"{w}-{l}" + (f"-{d}" if d else ""), "for": round(pf / len(games), 1),
             "against": round(pa / len(games), 1), "games": rows}
+
+
+# --------------------------------------------------------------------------- past stats (saved games)
+
+def season_label(sport, season):
+    """ESPN season numbers as people say them: NBA/NHL 2027 -> "2026-27", soccer 2026 -> "2026-27"."""
+    if sport in ("basketball_nba", "icehockey_nhl"):
+        return f"{season - 1}-{str(season)[2:]}"
+    if sport.startswith("soccer_"):
+        return f"{season}-{str(season + 1)[2:]}"
+    return str(season)
+
+
+def _avg(xs):
+    return round(sum(xs) / len(xs), 1) if xs else None
+
+
+def player_stats(sport, player, opponent=None, n=10, best_stat=None):
+    """A player's saved games: per-season averages and highs, a recent game log, games against
+    `opponent`, and best games for one stat. None if the player isn't in the saved box scores."""
+    cfg = props_stats.SPORTS.get(sport)
+    if not cfg:
+        return None
+    keys = list(cfg["labels"])
+    key = _key(player)
+    games = []
+    for g in props_stats.LIVE[sport].store.games.values():
+        for pl in g["players"]:
+            if _key(pl["name"]) == key and pl.get("min", 0) > 0:
+                home = pl["team"] == g["home"]
+                games.append({"date": g["date"], "season": g["season"], "team": pl["team"],
+                              "opp": g["away"] if home else g["home"], "home": home,
+                              "min": round(pl["min"], 1), **{k: pl.get(k, 0) for k in keys}})
+    if not games:
+        return None
+    games.sort(key=lambda x: x["date"], reverse=True)
+    seasons = []
+    for s in sorted({x["season"] for x in games}, reverse=True):
+        gs = [x for x in games if x["season"] == s]
+        seasons.append({"season": season_label(sport, s), "games": len(gs), "min": _avg([x["min"] for x in gs]),
+                        "avg": {k: _avg([x[k] for x in gs]) for k in keys},
+                        "high": {k: max(x[k] for x in gs) for k in keys}})
+    out = {"player": games[0] and player, "team": games[0]["team"], "sport": sport,
+           "labels": cfg["labels"], "keys": keys, "seasons": seasons, "log": games[:max(1, min(n, 40))]}
+    if opponent:
+        vs = [x for x in games if stats.same_team_strict(x["opp"], opponent)]
+        out["vs"] = {"opponent": opponent, "games": vs[:20],
+                     "avg": {k: _avg([x[k] for x in vs]) for k in keys} if vs else None}
+    if best_stat in keys:
+        out["best"] = {"stat": best_stat, "games": sorted(games, key=lambda x: (-x[best_stat], x["date"]))[:5]}
+    return out
+
+
+def team_stats(sport, team, opponent=None, n=10):
+    """A team's saved results: per-season record (home and away), average score for and
+    against, the last `n` games, and head-to-head games against `opponent`."""
+    lg = stats._leagues.get(sport)
+    if not lg:
+        return None
+    rows = []
+    for g in lg.store.games():
+        home = stats.same_team_strict(g["home"], team)
+        if not home and not stats.same_team_strict(g["away"], team):
+            continue
+        us, them = (g["hs"], g["as"]) if home else (g["as"], g["hs"])
+        rows.append({"date": g["date"], "season": g["season"], "home": home, "us": us, "them": them,
+                     "opp": g["away"] if home else g["home"], "result": "W" if us > them else "L" if us < them else "D"})
+    if not rows:
+        return None
+    rows.sort(key=lambda x: x["date"], reverse=True)
+
+    def record(rs):
+        w = sum(r["result"] == "W" for r in rs)
+        l = sum(r["result"] == "L" for r in rs)
+        d = sum(r["result"] == "D" for r in rs)
+        return f"{w}W {d}D {l}L" if sport.startswith("soccer_") else f"{w}-{l}" + (f"-{d}" if d else "")
+    seasons = []
+    for s in sorted({r["season"] for r in rows}, reverse=True):
+        rs = [r for r in rows if r["season"] == s]
+        seasons.append({"season": season_label(sport, s), "games": len(rs), "record": record(rs),
+                        "home": record([r for r in rs if r["home"]]), "away": record([r for r in rs if not r["home"]]),
+                        "for": _avg([r["us"] for r in rs]), "against": _avg([r["them"] for r in rs])})
+    streak = 1
+    while streak < len(rows) and rows[streak]["result"] == rows[0]["result"]:
+        streak += 1
+    out = {"team": team, "sport": sport, "seasons": seasons, "log": rows[:max(1, min(n, 40))],
+           "streak": f"{rows[0]['result']}{streak}"}
+    if opponent:
+        h2h = [r for r in rows if stats.same_team_strict(r["opp"], opponent)]
+        out["h2h"] = {"opponent": opponent, "record": record(h2h), "games": h2h[:20],
+                      "for": _avg([r["us"] for r in h2h]), "against": _avg([r["them"] for r in h2h])}
+    return out
+
+
+def stats_lines(entity, opponent=None):
+    """The same stats as short text lines, for the AI's fact sheet."""
+    sport = entity.get("sport_key")
+    lines = []
+    if entity.get("kind") == "player":
+        st = player_stats(sport, entity["player"], opponent=opponent, n=5)
+        if not st:
+            return lines
+        lab = st["labels"]
+        for s in st["seasons"]:
+            lines.append(f"{entity['player']} {s['season']}: {s['games']} games, {s['min']} minutes, "
+                         + ", ".join(f"{s['avg'][k]} {lab[k]}" for k in st["keys"]) + " per game; highs "
+                         + ", ".join(f"{s['high'][k]} {lab[k]}" for k in st["keys"]) + ".")
+        lines.append(f"{entity['player']} last 5 games: " + "; ".join(
+            f"{g['date'][:10]} {'vs' if g['home'] else '@'} {g['opp']}: " + ", ".join(f"{g[k]:g} {lab[k]}" for k in st["keys"])
+            for g in st["log"]))
+        if st.get("vs") and st["vs"]["games"]:
+            v = st["vs"]
+            lines.append(f"{entity['player']} vs {v['opponent']} ({len(v['games'])} games): "
+                         + ", ".join(f"{v['avg'][k]} {lab[k]}" for k in st["keys"]) + " per game.")
+    elif entity.get("kind") == "team":
+        st = team_stats(sport, entity["team"], opponent=opponent, n=5)
+        if not st:
+            return lines
+        for s in st["seasons"]:
+            lines.append(f"{entity['team']} {s['season']}: {s['record']} ({s['home']} home, {s['away']} away), "
+                         f"scoring {s['for']} and allowing {s['against']} per game.")
+        lines.append(f"{entity['team']} last 5: " + "; ".join(
+            f"{g['date'][:10]} {g['result']} {g['us']:g}-{g['them']:g} {'vs' if g['home'] else '@'} {g['opp']}" for g in st["log"]))
+        if st.get("h2h") and st["h2h"]["games"]:
+            h = st["h2h"]
+            lines.append(f"{entity['team']} vs {h['opponent']} (last two seasons): {h['record']}, "
+                         f"averaging {h['for']}-{h['against']}.")
+    return lines

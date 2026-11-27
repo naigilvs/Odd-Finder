@@ -75,7 +75,7 @@ class Reading(unittest.TestCase):
         cases = {"best nba props tonight": "best", "how am i doing": "record", "bankroll": "bankroll",
                  "my picks": "picks", "is the bot working": "bot", "how much should i bet": "stake",
                  "what's a push": "term", "what does +150 mean": "term", "is lebron playing": "injury",
-                 "mcdavid last 10": "form", "Jayson Tatum": "about", "hello": "help", "asdf qwer": "unknown",
+                 "mcdavid last 10": "stats", "Jayson Tatum": "about", "hello": "help", "asdf qwer": "unknown",
                  "Tatum over 27.5 points or Brown over 22.5 points": "compare", "over 224.5": "check",
                  # questions people actually asked that it first didn't understand
                  "can u talk to me": "talk", "any nba?": "best", "nba picks": "best", "what about nfl": "best",
@@ -244,3 +244,59 @@ class ServerAnswer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PastStats(unittest.TestCase):
+    """Player and team stats from saved games, with made-up games."""
+
+    def setUp(self):
+        self.saved = dict(chatbot._index)
+        chatbot._index.update(at=time.time(), players=PLAYERS, teams=TEAMS)
+        g = lambda i, date, season, home, away, pts, reb: (f"g{i}", {
+            "date": date, "season": season, "home": home, "away": away,
+            "players": [{"name": "Nikola Jokic", "team": "Denver Nuggets", "min": 35, "pts": pts, "reb": reb, "ast": 9, "3pm": 1}]})
+        self.box = dict([g(1, "2026-11-20T02:00Z", 2027, "Denver Nuggets", "Boston Celtics", 30, 12),
+                         g(2, "2026-11-22T02:00Z", 2027, "Utah Jazz", "Denver Nuggets", 20, 15),
+                         g(3, "2026-03-01T02:00Z", 2026, "Boston Celtics", "Denver Nuggets", 40, 10)])
+        self.results = [{"id": "r1", "date": "2026-11-20T02:00Z", "season": 2027, "home": "Denver Nuggets", "away": "Boston Celtics", "hs": 120, "as": 110},
+                        {"id": "r2", "date": "2026-11-22T02:00Z", "season": 2027, "home": "Utah Jazz", "away": "Denver Nuggets", "hs": 115, "as": 101},
+                        {"id": "r3", "date": "2026-03-01T02:00Z", "season": 2026, "home": "Boston Celtics", "away": "Denver Nuggets", "hs": 99, "as": 104}]
+
+    def tearDown(self):
+        chatbot._index.update(self.saved)
+
+    def test_player_stats(self):
+        with mock.patch.object(chatbot.props_stats.LIVE["basketball_nba"].store, "games", self.box):
+            st = chatbot.player_stats("basketball_nba", "Nikola Jokic", opponent="Boston Celtics", n=2, best_stat="pts")
+        self.assertEqual([s["season"] for s in st["seasons"]], ["2026-27", "2025-26"])
+        self.assertEqual((st["seasons"][0]["games"], st["seasons"][0]["avg"]["pts"], st["seasons"][0]["high"]["reb"]), (2, 25.0, 15))
+        self.assertEqual([g["date"][:10] for g in st["log"]], ["2026-11-22", "2026-11-20"])      # newest first, each game
+        self.assertEqual((st["log"][0]["opp"], st["log"][0]["home"], st["log"][0]["reb"]), ("Utah Jazz", False, 15))
+        self.assertEqual((len(st["vs"]["games"]), st["vs"]["avg"]["pts"]), (2, 35.0))            # both Celtics games
+        self.assertEqual(st["best"]["games"][0]["pts"], 40)
+
+    def test_team_stats(self):
+        fake = mock.MagicMock()
+        fake.store.games.return_value = self.results
+        with mock.patch.dict(chatbot.stats._leagues, {"basketball_nba": fake}):
+            st = chatbot.team_stats("basketball_nba", "Denver Nuggets", opponent="Boston Celtics", n=5)
+        self.assertEqual([(s["season"], s["record"], s["home"], s["away"]) for s in st["seasons"]],
+                         [("2026-27", "1-1", "1-0", "0-1"), ("2025-26", "1-0", "0-0", "1-0")])
+        self.assertEqual((st["log"][0]["result"], st["streak"]), ("L", "L1"))
+        self.assertEqual((st["h2h"]["record"], len(st["h2h"]["games"])), ("2-0", 2))
+
+    def test_stats_questions(self):
+        def ask(text):
+            out = chatbot.parse(text)
+            b = (out.get("bets") or [{}])[0]
+            return out["intent"], b.get("player") or b.get("team"), b.get("opponent"), out.get("n"), out.get("best")
+        self.assertEqual(ask("jokic stats")[:2], ("stats", "Nikola Jokic"))
+        self.assertEqual(ask("jokic last 5 games")[3], 5)
+        self.assertEqual(ask("jokic last night")[3], 1)
+        self.assertEqual(ask("jokic vs celtics")[:3], ("stats", "Nikola Jokic", "Boston Celtics"))
+        self.assertEqual(ask("jokic best rebounding games")[4], "reb")
+        self.assertEqual(ask("knicks vs celtics history")[:3], ("stats", "New York Knicks", "Boston Celtics"))
+        self.assertEqual(ask("celtics vs knicks history")[1], "Boston Celtics")                  # typed order
+        self.assertEqual(ask("nuggets record")[:2], ("stats", "Denver Nuggets"))
+        self.assertEqual(ask("jokic over 11.5 rebounds")[0], "check")                             # a bet, not stats
+        self.assertEqual(ask("did the nuggets win")[0], "result")

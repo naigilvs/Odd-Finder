@@ -1004,6 +1004,8 @@ def ai_facts(message, page_facts):
                              f"recent games: " + ", ".join(str(g["value"]) for g in f["recent"][:10]))
             elif "record" in f:
                 lines.append(f"{who} last {len(f['games'])} games: {f['record']}, scoring {f['for']} and allowing {f['against']} on average.")
+        other = next((x.get("team") for x in seen if x is not b and x.get("kind") == "team"), None)
+        lines += chatbot.stats_lines(b, opponent=other)
         if b["kind"] == "team":
             r = chat_result(b)
             if r:
@@ -1036,6 +1038,14 @@ def chat_answer(message, context=None):
     if p["intent"] == "unknown":
         chatbot.log_unknown(message)
     try:
+        if p["intent"] == "stats" and p.get("bets"):
+            b = p["bets"][0]
+            if b.get("kind") == "player":
+                p["stats_data"] = chatbot.player_stats(b["sport_key"], b["player"], opponent=b.get("opponent"),
+                                                       n=p.get("n") or 10, best_stat=p.get("best"))
+            else:
+                p["stats_data"] = chatbot.team_stats(b["sport_key"], b["team"], opponent=b.get("opponent"), n=p.get("n") or 10)
+            return p                                          # all from saved games: no lookups needed
         if p["intent"] == "schedule":
             p["games"] = chat_schedule(p)
         if p["intent"] == "result" and p.get("bets"):

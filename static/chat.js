@@ -164,6 +164,7 @@ async function answer(p, text) {
     case 'bot': return botSay(await botAnswer(), ['Best bets tonight', "What's CLV?"]);
     case 'best': return bestAnswer(p);
     case 'more': return moreAnswer();
+    case 'stats': return botSay(statsAnswer(p), statsChips(p));
     case 'schedule': return botSay(scheduleAnswer(p), ['What should I bet on tonight?', 'Safest bets tonight']);
     case 'result': return botSay(resultAnswer(p), ['Who plays tonight?', 'What should I bet on tonight?']);
     case 'winner': return winnerAnswer(p.bets);
@@ -325,6 +326,93 @@ const SMALLTALK_TEXT = {
   morning: 'Hey! Want to see what\'s good tonight?',
   smart: 'I try! I only know what the bot\'s numbers say, so I\'m best at bet questions. Tell me what I got wrong and I\'ll get better at it.',
 };
+
+// ---- past stats from saved games: season averages, game logs, head-to-head
+const STAT_SHORT = { pts: 'PTS', reb: 'REB', ast: 'AST', '3pm': '3PM', sog: 'SOG', passyds: 'Pass yds', rushyds: 'Rush yds',
+  recyds: 'Rec yds', rec: 'Rec' };
+// games are stored in UTC ("2026-11-27T01:20Z"); show the local date (Thanksgiving night, not the next day)
+const fmtDay = d => new Date(d.length > 10 ? d : d + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric', year: '2-digit' });
+const num = x => x == null ? '–' : (Math.round(x * 10) / 10).toString();
+
+function table(head, rows) {
+  return `<div class="ctable-wrap"><table class="ctable"><tr>${head.map(h => `<th>${esc(h)}</th>`).join('')}</tr>` +
+    rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('') + '</table></div>';
+}
+
+// Columns worth showing: stats the player actually has (no receiving yards for a QB), and
+// minutes only where they're real (NFL box scores don't have them; NHL's are time on ice).
+function shownKeys(st) {
+  return st.keys.filter(k => st.seasons.some(x => x.avg[k] > 0));
+}
+const minLabel = st => st.sport === 'icehockey_nhl' ? 'TOI' : st.sport === 'americanfootball_nfl' ? null : 'Min';
+
+function playerLog(st, games) {
+  const keys = shownKeys(st), ml = minLabel(st);
+  return table(['Date', 'Opp', ...(ml ? [ml] : []), ...keys.map(k => STAT_SHORT[k] || k)],
+    games.map(g => [fmtDay(g.date), `${g.home ? 'vs' : '@'} ${esc(shortTeam(g.opp))}`, ...(ml ? [num(g.min)] : []), ...keys.map(k => num(g[k]))]));
+}
+
+function statsAnswer(p) {
+  const b = (p.bets || [])[0] || {}, st = p.stats_data;
+  const who = b.player || b.team || 'that';
+  if (!st) {
+    return b.kind === 'player'
+      ? `I don't have saved games for ${esc(who)}. Player stats cover the NBA (points, rebounds, assists, 3-pointers), NHL (points, shots on goal) and NFL (passing, rushing and receiving yards, receptions), last season and this one.`
+      : `I don't have saved results for ${esc(who)}.`;
+  }
+  if (b.kind === 'player') {
+    const keys = shownKeys(st), lab = k => STAT_SHORT[k] || k, ml = minLabel(st);
+    const parts = [`<b>${esc(b.player)}</b> <span class="muted small">${esc(st.team)}</span>`];
+    if (p.n === 1) {                                        // last game
+      const g = st.log[0];
+      parts.push(`Last game, ${fmtDay(g.date)} ${g.home ? 'vs' : '@'} ${esc(g.opp)}: ${ml ? `${num(g.min)} ${ml.toLowerCase()}, ` : ''}` + keys.map(k => `<b>${num(g[k])}</b> ${esc(st.labels[k])}`).join(', ') + '.');
+    }
+    if (st.vs) {
+      const v = st.vs;
+      parts.push(v.games.length
+        ? `<b>vs ${esc(v.opponent)}</b>: ${v.games.length} game${v.games.length === 1 ? '' : 's'} in the last two seasons, averaging ` + keys.map(k => `${num(v.avg[k])} ${esc(st.labels[k])}`).join(', ') + '.' + playerLog(st, v.games)
+        : `No games against ${esc(v.opponent)} in the last two seasons.`);
+    }
+    if (st.best) {
+      parts.push(`<b>Best games by ${esc(st.labels[st.best.stat])}</b> (last two seasons):` + playerLog(st, st.best.games));
+    }
+    if (!st.vs && !st.best && p.n !== 1) {
+      parts.push('<b>Per game, by season</b>' + table(['Season', 'G', ...(ml ? [ml] : []), ...keys.map(lab)],
+        st.seasons.map(x => [esc(x.season), x.games, ...(ml ? [num(x.min)] : []), ...keys.map(k => num(x.avg[k]))])));
+      if (st.seasons[0]) parts.push(`<span class="muted small">Highs ${esc(st.seasons[0].season)}: ` + keys.map(k => `${num(st.seasons[0].high[k])} ${esc(st.labels[k])}`).join(', ') + '</span>');
+      const n = p.log ? st.log.length : Math.min(5, st.log.length);
+      parts.push(`<b>Last ${n} game${n === 1 ? '' : 's'}</b>` + playerLog(st, st.log.slice(0, n)));
+    }
+    return parts.join('<br>');
+  }
+  // team
+  const parts = [`<b>${esc(b.team)}</b>`];
+  parts.push(table(['Season', 'Record', 'Home', 'Away', 'Scored', 'Allowed'],
+    st.seasons.map(x => [esc(x.season), esc(x.record), esc(x.home), esc(x.away), num(x.for), num(x.against)])));
+  const n = +st.streak.slice(1), word = { W: ['won', 'wins'], L: ['lost', 'losses'], D: ['drew', 'draws'] }[st.streak[0]];
+  const streak = n === 1 ? `${word[0]} their last game` : `${n} ${word[1]} in a row`;
+  parts.push(`<span class="muted small">Current streak: ${streak}.</span>`);
+  const games = gs => table(['Date', 'Opp', 'Score', ''], gs.map(g => [fmtDay(g.date), `${g.home ? 'vs' : '@'} ${esc(shortTeam(g.opp))}`,
+    `${num(g.us)}-${num(g.them)}`, `<b class="${g.result === 'W' ? 'up' : g.result === 'L' ? 'down' : ''}">${g.result}</b>`]));
+  if (st.h2h) {
+    const h = st.h2h;
+    parts.push(h.games.length
+      ? `<b>vs ${esc(h.opponent)}</b> (last two seasons): ${esc(h.record)}, average score ${num(h.for)}-${num(h.against)}.` + games(h.games)
+      : `No games against ${esc(h.opponent)} in the last two seasons.`);
+  } else {
+    parts.push(`<b>Last ${st.log.length} games</b>` + games(st.log));
+  }
+  return parts.join('<br>');
+}
+
+function statsChips(p) {
+  const b = (p.bets || [])[0] || {};
+  const name = b.player || b.team || '';
+  if (!name) return CHIPS_START;
+  return b.kind === 'player'
+    ? [`${name} last 10 games`, `${name} best games`, `Is ${name} playing?`]
+    : [`${name} last 10`, `When do the ${nick(name)} play`, `Best bet in the ${nick(name)} game`];
+}
 
 function scheduleAnswer(p) {
   const games = p.games || [];

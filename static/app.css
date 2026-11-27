@@ -574,3 +574,8 @@
   .aitake.pending .ailabel { opacity: .7; }
   .chat header .ai-toggle { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--amber); }
   .chat header .ai-toggle[aria-pressed="false"] { color: var(--slate); }
+  .ctable-wrap { overflow-x: auto; margin: 6px 0 4px; }
+  .ctable { border-collapse: collapse; font-size: 12px; width: 100%; }
+  .ctable th { text-align: left; color: var(--slate); font-weight: 600; padding: 3px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .ctable td { padding: 3px 6px; border-bottom: 1px solid rgba(255,255,255,.05); white-space: nowrap; }
+  .ctable td:nth-child(n+3) { text-align: right; } .ctable th:nth-child(n+3) { text-align: right; }
