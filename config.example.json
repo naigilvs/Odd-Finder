@@ -1,3 +1,6 @@
 {
-  "odds_api_key": "0e6a1314510a09f2ed3d7433d6586264"
+  "odds_api_key": "PASTE-YOUR-ODDS-API-KEY-HERE",
+  "therundown_key": "optional: TheRundown free key",
+  "gemini_key": "optional: Google AI Studio key",
+  "github_backup": "optional: https://github.com/you/your-private-backup-repo.git"
 }
