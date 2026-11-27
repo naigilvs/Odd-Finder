@@ -504,7 +504,9 @@ def list_request(text):
             else "likely" if re.search(LIKELY, text) else "value")
     one = bool(re.search(r"\b(a|one|single|1|your|ur) (best |top )?(pick|bet|play)\b|\bpick (one|something)\b|\bwhat should i bet\b|\bwhat('?s| is) the (best|top) (bet|pick|play)\b", text))
     window = "tomorrow" if re.search(r"\btomorrow\b", text) else "today" if re.search(r"\b(tonight|today|todays|this evening)\b", text) else None
-    return {"mode": mode, "one": one, "window": window}
+    m = re.search(r"\b(?:top|best|list of|give me|show me)\s+(\d{1,2})\b|\b(\d{1,2})\s+(?:best\s+|top\s+|good\s+)?(?:props?|bets?|picks?|plays?|options?|choices)\b", text)
+    count = int(m.group(1) or m.group(2)) if m else (8 if re.search(r"\b(list|all|several|some|few|options|choices)\b", text) else 5)
+    return {"mode": mode, "one": one, "window": window, "count": max(1, min(count, 20))}
 
 
 def _has(text, *patterns):

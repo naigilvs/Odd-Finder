@@ -101,6 +101,12 @@ class Reading(unittest.TestCase):
         self.assertEqual(ask("what do u recommend")[0], "best")
         self.assertEqual(ask("give me a pick")[2], True)
         self.assertEqual(ask("any good bets tomorrow")[3], "tomorrow")
+        count = lambda t: chatbot.parse(t)["count"]
+        self.assertEqual(count("give me a list of props that you think is the best choices"), 8)   # "a list"
+        self.assertEqual(count("top 10 nba props"), 10)
+        self.assertEqual(count("best 3 bets tonight"), 3)
+        self.assertEqual(count("best nba picks"), 5)
+        self.assertEqual(count("top 50 bets"), 20)                                               # capped
         for text in ("more", "show more", "what else", "next"):
             self.assertEqual(chatbot.parse(text)["intent"], "more", text)
         # a recommendation question still works mid-conversation about another bet

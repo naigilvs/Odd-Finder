@@ -740,10 +740,33 @@ function inWindow(r, window) {
   return true;
 }
 
-function pickItem(r, i, mode, listId) {
+// Why a bet is on the list, in one line: what the stats expect vs the line, the fair price,
+// and what keeps confidence down.
+function pickReason(r) {
+  const s = statOf(r), bits = [];
+  if (s && s.expected_stat != null && r.point != null) {
+    const dir = s.expected_stat > r.point ? 'over' : s.expected_stat < r.point ? 'under' : 'right at';
+    bits.push(`stats expect ${s.expected_stat} ${s.stat_name}, ${dir} the ${r.point} line`);
+  } else if (s && s.prob != null) {
+    bits.push(`stats give it ${pct(s.prob, 0)}`);
+  }
+  if (r.fair_prob) bits.push(`fair price ${americanOdds(1 / r.fair_prob)} vs FanDuel ${r.american}`);
+  const inj = (injOf(r) || {}).player;
+  if (inj) bits.push(`⚠ ${inj.name} ${inj.status.toLowerCase()}`);
+  const c = confidence(r);
+  if (c.level === 'low') {
+    const why = /only \d+ sportsbook|thinner markets|estimated|disagree|injury/.exec(c.why);
+    bits.push(`low confidence${why ? `: ${why[0].replace('player props are thinner markets', 'thin prop market').replace(/only (\d+) sportsbooks?.*/, 'only $1 books to compare')}` : ''}`);
+  }
+  return bits.join(' · ');
+}
+
+function pickItem(r, i, mode, listId, number) {
   const poor = mode === 'likely' && r.ev < 0 ? ` <span class="poorprice">⚠ Poor price</span>` : '';
-  return `<button type="button" class="cpick" data-l="${listId}" data-i="${i}"><b>${esc(betLabel(r))}</b> ${esc(r.american)}${poor}
-    <span class="muted small">${esc(r.event)}, ${when(r.start)} · ${pct(chance(r), 0)} chance · <span class="${r.ev > 0 ? 'up' : 'down'}">${signed(r.ev)}</span> value · ${confidence(r).label}</span></button>`;
+  const solid = r.ev > 0 && confidence(r).level !== 'low' ? ' <span class="solid" title="Positive value and medium or high confidence">✓</span>' : '';
+  return `<button type="button" class="cpick" data-l="${listId}" data-i="${i}"><b>${number ? `${number}. ` : ''}${esc(betLabel(r))}</b> ${esc(r.american)}${solid}${poor}
+    <span class="muted small">${esc(r.event)}, ${when(r.start)} · ${pct(chance(r), 0)} chance · <span class="${r.ev > 0 ? 'up' : 'down'}">${signed(r.ev)}</span> value · ${confidence(r).label}</span>
+    <span class="why small">${esc(pickReason(r))}</span></button>`;
 }
 
 // Show part of a list, remembering the rest for "show more".
@@ -752,21 +775,23 @@ function keepList(rows) {
   CHAT.lists[id] = rows;
   return id;
 }
-function showList(head, rows, mode, foot, chips) {
-  CHAT.list = { rows, mode, offset: 5 };
-  const page = rows.slice(0, 5), id = keepList(page);
-  const more = rows.length > 5 ? `<br><span class="muted small">${rows.length - 5} more: say <i>show more</i>.</span>` : '';
-  botSay(`${head}<div class="cpicks">${page.map((r, i) => pickItem(r, i, mode, id)).join('')}</div>${foot || ''}${more}`,
-    chips || (rows.length > 5 ? ['Show more', 'Safest bets tonight', 'Check a bet'] : ['Safest bets tonight', 'Check a bet']));
+function showList(head, rows, mode, foot, chips, size) {
+  size = size || 5;
+  CHAT.list = { rows, mode, offset: size, size };
+  const page = rows.slice(0, size), id = keepList(page);
+  const more = rows.length > size ? `<br><span class="muted small">${rows.length - size} more: say <i>show more</i>.</span>` : '';
+  botSay(`${head}<div class="cpicks">${page.map((r, i) => pickItem(r, i, mode, id, i + 1)).join('')}</div>${foot || ''}${more}`,
+    chips || (rows.length > size ? ['Show more', 'Safest bets tonight', 'Check a bet'] : ['Safest bets tonight', 'Check a bet']));
 }
 
 function moreAnswer() {
   const L = CHAT.list;
   if (!L || L.offset >= L.rows.length) return botSay('That\'s everything in the last list. Ask for another league, or <i>safest bets tonight</i>.', CHIPS_START);
-  const page = L.rows.slice(L.offset, L.offset + 5), id = keepList(page);
-  L.offset += 5;
+  const size = L.size || 5, start = L.offset;
+  const page = L.rows.slice(start, start + size), id = keepList(page);
+  L.offset += size;
   const left = L.rows.length - L.offset;
-  botSay(`<div class="cpicks">${page.map((r, i) => pickItem(r, i, L.mode, id)).join('')}</div>${left > 0 ? `<span class="muted small">${left} more: say <i>show more</i>.</span>` : '<span class="muted small">That\'s all of them.</span>'}`,
+  botSay(`<div class="cpicks">${page.map((r, i) => pickItem(r, i, L.mode, id, start + i + 1)).join('')}</div>${left > 0 ? `<span class="muted small">${left} more: say <i>show more</i>.</span>` : '<span class="muted small">That\'s all of them.</span>'}`,
     left > 0 ? ['Show more', 'Check a bet'] : ['Safest bets tonight', 'Check a bet']);
 }
 
@@ -850,7 +875,7 @@ async function bestAnswer(p) {
   if (mode === 'likely') {
     const list = picked.sort((a, b) => chance(b) - chance(a));
     return showList(`${same}<b>Most likely to win</b> (${what}): the side the bot thinks will win, highest chance first. <span class="muted small">⚠ Poor price means likely, but FanDuel charges more than it's worth.</span>`, list, 'likely', foot,
-      ['Show more', 'Best value instead', 'Check a bet']);
+      ['Show more', 'Best value instead', 'Check a bet'], p.count);
   }
   if (mode === 'agree') {
     const list = picked.filter(r => r.agree_sides).sort((a, b) => b.ev - a.ev);
@@ -870,11 +895,16 @@ async function bestAnswer(p) {
       [top, ...others], 'value', foot, ['Why?', 'How much should I bet?', 'Show more']);
     return;
   }
-  if (solid.length) {
-    return showList(`${same}<b>${solid.length} good-value pick${solid.length === 1 ? '' : 's'}</b> (${what}): positive value, medium confidence or better, best first.`, solid.concat(good.filter(r => !solid.includes(r))), 'value', foot);
-  }
+  const size = p.count || 5;
   if (good.length) {
-    return showList(`${same}These ${what} beat FanDuel's price, but only with <b>low confidence</b>${freeOnly ? ' (only 2 books to compare with on the free odds)' : ''}, so treat them as leans:`, good, 'value', foot);
+    // solid picks (positive value, medium+ confidence) first, then the low-confidence ones, each best value first
+    const ranked = solid.concat(good.filter(r => !solid.includes(r)));
+    const head = solid.length === good.length
+      ? `<b>${good.length} ${esc(what)} beat FanDuel's price right now</b>, all with medium or high confidence. Best first:`
+      : solid.length
+        ? `<b>${good.length} ${esc(what)} beat FanDuel's price right now.</b> The ${solid.length === 1 ? 'first one is' : `first ${solid.length} are`} the most solid (✓: medium or high confidence); the rest are leans with low confidence. Best first:`
+        : `<b>${good.length} ${esc(what)} beat FanDuel's price right now</b>, all with low confidence${freeOnly ? ' (only 2 books to compare with on the free odds)' : ' (thin markets or few books to compare)'}, so treat them as leans. Best first:`;
+    return showList(`${same}${head}`, ranked, 'value', foot, null, size);
   }
   // nothing has value: explain, then show something useful instead of the same list again
   const likely = picked.slice().sort((a, b) => chance(b) - chance(a));

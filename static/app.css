@@ -542,7 +542,8 @@
   .cpicks { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
   .cpick { text-align: left; background: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--chalk); cursor: pointer; font: inherit; }
   .cpick:hover { border-color: var(--amber); }
-  .cpick span { display: block; margin-top: 2px; }
+  .cpick > span { display: block; margin-top: 2px; }
+  .cpick > span span, .cpick .solid, .cpick .poorprice { display: inline; }
   .chat-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 8px; }
   .chip { background: var(--panel); border: 1px solid var(--line); color: var(--chalk); border-radius: 999px; padding: 5px 11px; font: 13px var(--body); cursor: pointer; }
   .chip:hover { border-color: var(--amber); }
@@ -579,3 +580,5 @@
   .ctable th { text-align: left; color: var(--slate); font-weight: 600; padding: 3px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   .ctable td { padding: 3px 6px; border-bottom: 1px solid rgba(255,255,255,.05); white-space: nowrap; }
   .ctable td:nth-child(n+3) { text-align: right; } .ctable th:nth-child(n+3) { text-align: right; }
+  .cpick .why { display: block; margin-top: 3px; color: var(--chalk); opacity: .8; }
+  .cpick .solid { color: var(--turf); font-weight: 700; }
