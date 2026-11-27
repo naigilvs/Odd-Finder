@@ -223,8 +223,9 @@ async function scan() {
     const at = Date.now();
     STATS.known = {};            // fresh odds: ask for fresh stats too
     clearTimeout(STATS.timer); STATS.timer = null;
-    sports.forEach(k => state.results[k] = { rows: [], at });
-    res.rows.forEach(r => (state.results[r.sport_key] ||= { rows: [], at }).rows.push(r));
+    const failed = new Set(res.failed || []);                 // a failed league keeps its last odds
+    sports.filter(k => !failed.has(k)).forEach(k => state.results[k] = { rows: [], at });
+    res.rows.filter(r => !failed.has(r.sport_key)).forEach(r => (state.results[r.sport_key] ||= { rows: [], at }).rows.push(r));
     state.source = res.source;
     showCredits(res.quota, res.rundown_usage);
     renderAll(true);

@@ -613,8 +613,9 @@ async function chatScan(sports) {
   const p = new URLSearchParams({ book: state.book.key, sports: sports.join(','), props: 0, min_books: 1, source: 'therundown' });
   const res = await getJSON('/api/scan?' + p);
   const at = Date.now();
-  sports.forEach(k => state.results[k] = { rows: [], at });
-  res.rows.forEach(r => (state.results[r.sport_key] ||= { rows: [], at }).rows.push(r));
+  const failed = new Set(res.failed || []);                   // a failed league keeps its last odds
+  sports.filter(k => !failed.has(k)).forEach(k => state.results[k] = { rows: [], at });
+  res.rows.filter(r => !failed.has(r.sport_key)).forEach(r => (state.results[r.sport_key] ||= { rows: [], at }).rows.push(r));
   state.source = res.source;
   showCredits(res.quota, res.rundown_usage);
   renderAll(false);
@@ -694,8 +695,11 @@ async function bestAnswer(p) {
   const scope = p.scope && (p.scope.team || p.scope.player) ? p.scope : null;
   if (scope && scope.sport_key) leagues = [scope.sport_key];
   // refresh old or missing main lines for free, so answers use today's prices
-  const stale = (p.props || (scope && scope.player)) ? []
-    : leagues.filter(k => !state.results[k] || Date.now() - state.results[k].at > FRESH_MINUTES * 60000);
+  const pointsLow = state.rundownUsage && state.rundownUsage.remaining != null && state.rundownUsage.remaining < 3000;
+  const asked = new Set((p.sports || []).concat(scope && scope.sport_key ? [scope.sport_key] : []));
+  const stale = (p.props || (scope && scope.player) || pointsLow) ? []
+    : leagues.filter(k => (!state.results[k] || Date.now() - state.results[k].at > FRESH_MINUTES * 60000)
+        && (asked.has(k) || !/ncaa/.test(k)));                 // college leagues cost the most points: only when asked
   let refreshed = false;
   if (stale.length && state.cfg.rundown && !state.cfg.demo && !p.event_id) {
     const wait = addMsg('bot typing', `Getting fresh ${stale.map(leagueName).join(', ')} odds (free)…`);

@@ -87,7 +87,8 @@ def _get(key, path, **params):
                 time.sleep(2)                          # too fast: wait and try again
                 continue
             if e.code == 429:
-                raise RundownError("TheRundown's free daily limit is used up; it resets at midnight UTC.")
+                usage.update(remaining=0)                   # so the page shows 0 left, not nothing
+                raise RundownError("TheRundown's free daily limit is used up; it resets at midnight UTC (7 p.m. Eastern).")
             if e.code in (401, 403):
                 raise RundownError("TheRundown didn't accept the key in config.json.")
             raise RundownError(f"TheRundown said HTTP {e.code}.")

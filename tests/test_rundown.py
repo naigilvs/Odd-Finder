@@ -1,6 +1,7 @@
 """Tests for TheRundown's free odds (rundown.py) and the free scan path in app.py, with made-up responses."""
 import sys
 import unittest
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -149,3 +150,40 @@ class ReviewFixes(unittest.TestCase):
                 self.assertEqual(app.keep_saved_props("fanduel", ["basketball_nba"], [main], True), [main])
         self.assertEqual([r["selection"] for r in rows], ["A", "P Over 20.5"])
         self.assertTrue(rows[1]["scanned_at"])                                 # keeps when it was scanned
+
+
+class FailedScans(unittest.TestCase):
+    def test_a_failed_league_keeps_its_saved_odds(self):
+        import tempfile
+        from pathlib import Path
+        import scans
+        with tempfile.TemporaryDirectory() as d:
+            store = scans.ScanStore(Path(d) / "scans.json")
+            old = {"event_id": "g1", "market": "h2h", "selection": "A", "player": None, "start": "2099-01-01T00:00:00Z",
+                   "sport_key": "basketball_nba"}
+            store.save_main("fanduel", ["basketball_nba"], [old])
+
+            def fetch(sport, target, props):
+                if sport == "basketball_nba":
+                    raise rundown.RundownError("TheRundown's free daily limit is used up")
+                return [rundown.convert(event(start="2099-01-01T00:00:00Z"), sport, "NHL")]
+            with mock.patch.object(app, "SCANS", store), mock.patch.object(app, "RUNDOWN_KEY", "k"), \
+                    mock.patch.object(app, "DEMO", False), mock.patch.object(app, "fetch_events_free", side_effect=fetch):
+                res = app.run_scan("fanduel", ["basketball_nba", "icehockey_nhl"], False, 1, "therundown")
+                self.assertEqual(res["failed"], ["basketball_nba"])
+                ok = [x for x in ["basketball_nba", "icehockey_nhl"] if x not in res["failed"]]
+                store.save_main("fanduel", ok, res["rows"])
+            saved = store.load("fanduel")["results"]
+        self.assertEqual([r["selection"] for r in saved["basketball_nba"]["rows"]], ["A"])       # untouched
+        self.assertTrue(saved["icehockey_nhl"]["rows"])
+
+    def test_used_up_limit_shows_zero_left(self):
+        def limited(*a, **k):
+            raise urllib.error.HTTPError("u", 429, "limit", {}, None)
+        rundown._cache.clear()
+        with mock.patch.object(rundown.urllib.request, "urlopen", side_effect=limited), \
+                mock.patch.object(rundown.time, "sleep"):
+            with self.assertRaises(rundown.RundownError):
+                rundown._get("k", "sports/4/events/2099-01-01")
+        self.assertEqual(rundown.usage["remaining"], 0)
+        rundown.usage.update(remaining=None)

@@ -658,6 +658,7 @@ AUTOSCAN_DEFAULTS = {"enabled": True, "sports": ["basketball_nba", "icehockey_nh
 AUTOSCAN_HOURS = (2, 3, 4, 6)
 QUIET_HOURS = range(2, 8)          # no automatic scans from 2 to 8 a.m. (lines barely move; saves free points)
 MIN_FREE_POINTS = 3000             # leave this much of TheRundown's daily allowance for your own scans
+MIN_FREE_POINTS_CLOSING = 1500     # closing-price checks stop a little later than automatic scans
 
 
 class AutoScanSettings:
@@ -743,7 +744,9 @@ def autoscan_once(now=None):
     sports = [x for x in cfg["sports"] if x in rundown.SPORT_IDS]
     try:
         res = run_scan("fanduel", sports, False, 1, "therundown")
-        SCANS.save_main("fanduel", sports, keep_saved_props("fanduel", sports, res["rows"], False))
+        ok = [x for x in sports if x not in res.get("failed", [])]          # a failed league keeps its last odds
+        if ok:
+            SCANS.save_main("fanduel", ok, keep_saved_props("fanduel", ok, res["rows"], False))
         log_scanned(res["rows"])
         AUTOSCAN.update(last_at=now.isoformat(), last_count=len(res["rows"]),
                         last_error="; ".join(res["errors"]) or None)
@@ -778,6 +781,8 @@ def closing_scan_once(now=None):
     minutes, from TheRundown's free odds (no credits). Returns how many bets got one."""
     if not RUNDOWN_KEY or DEMO:
         return 0
+    if rundown.usage.get("remaining") is not None and rundown.usage["remaining"] < MIN_FREE_POINTS_CLOSING:
+        return 0                                          # leave the rest of today's free points for your scans
     by_sport = {}
     for b in TRACK.due_for_close(now):
         if b.get("sport_key") in rundown.SPORT_IDS:
@@ -1057,19 +1062,20 @@ def chat_answer(message, context=None):
 
 def run_scan(target, sports, include_props, min_books, source="odds_api"):
     now = datetime.now(timezone.utc)
-    rows, errors = [], []
+    rows, errors, failed = [], [], []
     free = source == "therundown" and RUNDOWN_KEY and not DEMO
 
     def one(sport):
         try:
-            return (fetch_events_free if free else fetch_events)(sport, target, include_props), None
+            return sport, (fetch_events_free if free else fetch_events)(sport, target, include_props), None
         except (ApiError, rundown.RundownError) as e:
-            return [], f"{sport}: {e}"
+            return sport, [], f"{sport}: {e}"
 
     with ThreadPoolExecutor(max_workers=6) as pool:
-        for events, err in pool.map(one, sports):
+        for sport, events, err in pool.map(one, sports):
             if err:
                 errors.append(err)
+                failed.append(sport)             # keep this league's last good odds
             for ev in events:
                 if parse_time(ev["commence_time"]) <= now:
                     continue  # skip games already underway; live odds move too fast
@@ -1080,7 +1086,7 @@ def run_scan(target, sports, include_props, min_books, source="odds_api"):
     rows.sort(key=lambda r: r["ev"], reverse=True)
     return {
         "book": TARGET_BOOKS[target], "demo": DEMO, "generated": now.isoformat(),
-        "count": len(rows), "rows": rows, "errors": errors, "quota": _quota,
+        "count": len(rows), "rows": rows, "errors": errors, "failed": failed, "quota": _quota,
         "source": "therundown" if free else "odds_api", "rundown_usage": rundown.usage,
     }
 
@@ -1515,8 +1521,10 @@ class Handler(BaseHTTPRequestHandler):
                 min_books = max(1, int(q.get("min_books", ["2"])[0]))
                 source = q.get("source", ["odds_api"])[0]
                 result = run_scan(target, sports, props, min_books, source)
-                result["rows"] = keep_saved_props(target, sports, result["rows"], props)
-                SCANS.save_main(target, sports, result["rows"])
+                ok = [x for x in sports if x not in result.get("failed", [])]   # a failed league keeps its last odds
+                result["rows"] = keep_saved_props(target, ok, result["rows"], props)
+                if ok:
+                    SCANS.save_main(target, ok, result["rows"])
                 self.send_json(result)
             elif url.path == "/api/saved-scans":
                 target = q.get("book", ["fanduel"])[0]
