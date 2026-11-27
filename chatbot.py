@@ -411,6 +411,25 @@ def follow_up(text, ctx):
 
 # --------------------------------------------------------------------------- what is being asked
 
+LIKELY = r"\b(safest|safe|most likely|likeliest|highest (chance|probability)|locks?|sure (things?|bets?|picks?)|surest|likely to (win|hit)|won'?t lose|best chance|favou?rites)\b"
+CLOSEST = r"\b(closest|nearly fair|almost (fair|value)|close to (fair|value)|least bad)\b"
+AGREE = r"\b(both agree|agree|best (value )?and (most )?likely|value and likely)\b"
+RECOMMEND = (r"what (should|can|do) i (bet|take|play|pick)( on)?\b", r"what (do|would) (you|u) (recommend|bet|take|play|pick|like)",
+             r"\bgive me (a|some|any|your)? ?(pick|bet|play)s?\b", r"\b(any|some) good (bets?|picks?|plays?)\b",
+             r"\bwhat('?s| is) good\b", r"\bwhat to (bet|play)\b", r"\b(recommend|suggest)\b", r"\b(your|ur) (best|top) (pick|bet|play)\b",
+             r"\bpick (one|something) for me\b", r"\bwhat('?s| is) the (best|top) (bet|pick|play)\b")
+
+
+def list_request(text):
+    """Details of a request for a list of bets: side ("value", "likely", "agree"), one pick
+    or a list, and when ("today" or "tomorrow")."""
+    mode = ("closest" if re.search(CLOSEST, text) else "agree" if re.search(AGREE, text)
+            else "likely" if re.search(LIKELY, text) else "value")
+    one = bool(re.search(r"\b(a|one|single|1|your|ur) (best |top )?(pick|bet|play)\b|\bpick (one|something)\b|\bwhat should i bet\b|\bwhat('?s| is) the (best|top) (bet|pick|play)\b", text))
+    window = "tomorrow" if re.search(r"\btomorrow\b", text) else "today" if re.search(r"\b(tonight|today|todays|this evening)\b", text) else None
+    return {"mode": mode, "one": one, "window": window}
+
+
 def _has(text, *patterns):
     return any(re.search(p, text) for p in patterns)
 
@@ -447,6 +466,12 @@ def parse(message, context=None):
     if _has(text, r"\bbot\b.*\b(work|working|good|accurate|results|record|doing)\b", r"\b(is|how) (the )?bot\b",
             r"\bbot results\b", r"\bclv\b", r"\btrack record\b", r"\bhow accurate\b"):
         return dict(out, intent="bot")
+    if re.search(CLOSEST, text):
+        return dict(out, intent="best", here=False, **list_request(text))
+    if re.fullmatch(r"(show |give me |any )?(more|next|next ones?|next page|others|other ones|more please|anything else|what else|keep going)\??", text):
+        return dict(out, intent="more")
+    if _has(text, *RECOMMEND) and not SIDE_LINE.search(text) and not ODDS.search(text):
+        return dict(out, intent="best", here=False, **list_request(text))
     stake = _has(text, r"how much (should|to|do) i (bet|wager|put)", r"\b(stake|bet size|how much on)\b")
     if _has(text, r"^(why|how come|why not|explain( that| it| this)?|reasons?|what makes (it|that))\b\??$"):
         return dict(out, intent="why")                           # the page answers about the last bet, or asks for one
@@ -454,7 +479,7 @@ def parse(message, context=None):
         if _has(text, r"\b(save|add|keep) (it|that|this)\b", r"\bsave (the )?(bet|pick)\b"):
             return dict(out, intent="save")
         if _has(text, r"\b(this|that|same) game\b") and _has(text, r"\b(best|other|else|any|more|value|bets?|props?)\b"):
-            return dict(out, intent="best", event_id=ctx.get("event_id"), here=False)
+            return dict(out, intent="best", event_id=ctx.get("event_id"), here=False, **list_request(text))
         cm = re.search(r"\bcompare (?:it|that|this)?\s*(?:with|to|and|vs\.?|against)\s+(.+)", text)
         if cm:
             second = read_bet(cm.group(1), out["sports"] or None, [t for t in (ctx.get("team"), ctx.get("opponent")) if t])
@@ -489,8 +514,8 @@ def parse(message, context=None):
     if stake:
         return dict(out, intent="stake")
     if _has(text, r"\b(best|top|good|value|recommend|suggest|should i bet|what to bet|any (bets|picks|value))\b", r"\bpicks? (for )?(tonight|today|tomorrow)\b", r"\bbets? (tonight|today|tomorrow)\b",
-            r"(?<!my )\bpicks?\b", r"\bany\b.*\b(bets?|props?|games?)\b") or (out["sports"] and not bet.get("kind")):
-        return dict(out, intent="best", here=bool(re.search(r"\b(here|these|on screen|this list)\b", text)))
+            r"(?<!my )\bpicks?\b", r"\bany\b.*\b(bets?|props?|games?)\b", LIKELY, AGREE, *RECOMMEND) or (out["sports"] and not bet.get("kind")):
+        return dict(out, intent="best", here=bool(re.search(r"\b(here|these|on screen|this list)\b", text)), **list_request(text))
     if bet.get("kind") in ("team", "player"):
         return dict(out, intent="about", bets=[bet])        # just a name: form and injuries
     if _has(text, r"^(hi|hey|hello|yo|sup|help)\b", r"what can you do", r"\bhelp\b"):

@@ -32,7 +32,7 @@ const TERM_TEXT = {
   b2b: 'A <b>back-to-back</b> is two games on consecutive days. Tired teams can play worse, but in the bot\'s tests rest didn\'t make predictions more accurate.',
 };
 
-const CHIPS_START = ['Best bets tonight', 'Check a bet', 'How am I doing?', 'Is the bot working?', "What's a push?"];
+const CHIPS_START = ['What should I bet on tonight?', 'Safest bets tonight', 'Check a bet', 'How am I doing?', 'Is the bot working?'];
 const CHIPS_AFTER_BET = ['Why?', 'How much should I bet?', 'What about the other side?', 'Save it', 'Full details'];
 
 // ---- the panel
@@ -119,6 +119,7 @@ async function answer(p, text) {
     case 'picks': return botSay(picksAnswer(), ['Best bets tonight', 'How am I doing?']);
     case 'bot': return botSay(await botAnswer(), ['Best bets tonight', "What's CLV?"]);
     case 'best': return bestAnswer(p);
+    case 'more': return moreAnswer();
     case 'choose': {
       const names = p.bets[0].choices;
       return botSay(`Which player did you mean?`, names.map(n => `${n.replace(/ \(.*\)$/, '')} ${text}`.slice(0, 120)));
@@ -137,7 +138,10 @@ async function answer(p, text) {
     }
     case 'about': return botSay(aboutAnswer(p.bets[0]), ['Best bets tonight']);
     default:
-      return botSay(`I didn't understand that one, sorry. I've saved it so I can learn it later. Here's what I can do:<br>${helpText()}`, CHIPS_START);
+      CHAT.unknowns = (CHAT.unknowns || 0) + 1;
+      return botSay(CHAT.unknowns === 1
+        ? `I didn't understand that one, sorry. I've saved it so I can learn it later. Here's what I can do:<br>${helpText()}`
+        : `Sorry, I didn't get that either (saved so I can learn it). Try a bet like <i>Knicks −4.5</i>, or tap one of these:`, CHIPS_START);
   }
 }
 
@@ -347,29 +351,173 @@ function aboutAnswer(bet) {
   return parts.join('<br>');
 }
 
-function bestAnswer(p) {
+// ---- lists of bets: best value, most likely to win, both agree
+const FRESH_MINUTES = 45;              // older scans are refreshed (free) before answering
+const POPULAR_LEAGUES = ['basketball_nba', 'icehockey_nhl', 'americanfootball_nfl', 'soccer_epl'];
+const LEAGUE_NAME = { basketball_nba: 'NBA', icehockey_nhl: 'NHL', americanfootball_nfl: 'NFL', baseball_mlb: 'MLB',
+  basketball_ncaab: 'college basketball', americanfootball_ncaaf: 'college football', soccer_epl: 'EPL' };
+const leagueName = k => LEAGUE_NAME[k] || ((state.sports.find(s => s.key === k) || {}).title) || k;
+
+// Free main-line odds for these leagues (TheRundown), added to the page like a normal scan.
+async function chatScan(sports) {
+  const p = new URLSearchParams({ book: state.book.key, sports: sports.join(','), props: 0, min_books: 1, source: 'therundown' });
+  const res = await getJSON('/api/scan?' + p);
+  const at = Date.now();
+  sports.forEach(k => state.results[k] = { rows: [], at });
+  res.rows.forEach(r => (state.results[r.sport_key] ||= { rows: [], at }).rows.push(r));
+  state.source = res.source;
+  showCredits(res.quota, res.rundown_usage);
+  renderAll(false);
+  scheduleTrackLog();
+  return res;
+}
+
+// Stats opinions (and injury news) for these bets, waiting briefly while models load.
+async function ensureStats(rows) {
+  for (let tries = 0; tries < 4; tries++) {
+    const need = rows.filter(r => !(statKey(r) in STATS.known));
+    if (!need.length) break;
+    const items = need.map(r => ({ key: statKey(r), sport_key: r.sport_key, market: r.market, outcome: r.outcome,
+      point: r.point, home: r.home_team, away: r.away_team, team: r.team_total_for, player: r.player, fair_prob: r.fair_prob }));
+    try {
+      const res = await (await fetch('/api/stats', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }) })).json();
+      Object.assign(STATS.known, res.stats || {});
+      if (!res.pending) break;
+    } catch (e) { break; }
+    await new Promise(r => setTimeout(r, 2500));
+  }
+  try { await loadInjuries(); } catch (e) { /* optional */ }
+}
+
+function inWindow(r, window) {
+  const t = new Date(r.start), now = new Date();
+  if (window === 'today') { const end = new Date(now); end.setDate(end.getDate() + 1); end.setHours(5, 0, 0, 0); return t < end; }
+  if (window === 'tomorrow') {
+    const a = new Date(now); a.setDate(a.getDate() + 1); a.setHours(5, 0, 0, 0);
+    const b = new Date(a); b.setDate(b.getDate() + 1);
+    return t >= a && t < b;
+  }
+  return true;
+}
+
+function pickItem(r, i, mode) {
+  const poor = mode === 'likely' && r.ev < 0 ? ` <span class="poorprice">⚠ Poor price</span>` : '';
+  return `<button type="button" class="cpick" data-i="${i}"><b>${esc(betLabel(r))}</b> ${esc(r.american)}${poor}
+    <span class="muted small">${esc(r.event)}, ${when(r.start)} · ${pct(chance(r), 0)} chance · <span class="${r.ev > 0 ? 'up' : 'down'}">${signed(r.ev)}</span> value · ${confidence(r).label}</span></button>`;
+}
+
+// Show part of a list, remembering the rest for "show more".
+function showList(head, rows, mode, foot, chips) {
+  CHAT.list = { rows, mode, offset: 5 };
+  CHAT.picks = rows.slice(0, 5);
+  const more = rows.length > 5 ? `<br><span class="muted small">${rows.length - 5} more: say <i>show more</i>.</span>` : '';
+  botSay(`${head}<div class="cpicks">${CHAT.picks.map((r, i) => pickItem(r, i, mode)).join('')}</div>${foot || ''}${more}`,
+    chips || (rows.length > 5 ? ['Show more', 'Safest bets tonight', 'Check a bet'] : ['Safest bets tonight', 'Check a bet']));
+}
+
+function moreAnswer() {
+  const L = CHAT.list;
+  if (!L || L.offset >= L.rows.length) return botSay('That\'s everything in the last list. Ask for another league, or <i>safest bets tonight</i>.', CHIPS_START);
+  const page = L.rows.slice(L.offset, L.offset + 5);
+  CHAT.picks = page;
+  L.offset += 5;
+  const left = L.rows.length - L.offset;
+  botSay(`<div class="cpicks">${page.map((r, i) => pickItem(r, i, L.mode)).join('')}</div>${left > 0 ? `<span class="muted small">${left} more: say <i>show more</i>.</span>` : '<span class="muted small">That\'s all of them.</span>'}`,
+    left > 0 ? ['Show more', 'Check a bet'] : ['Safest bets tonight', 'Check a bet']);
+}
+
+async function bestAnswer(p) {
   const now = new Date().toISOString();
-  let rows = p.here && state.shown && state.shown.length ? state.shown : scannedRows();
-  rows = rows.filter(r => r.start > now);
-  if (p.event_id) {
-    rows = rows.filter(r => r.event_id === p.event_id);
-    if (!rows.length) return botSay('I don\'t have scanned bets for that game yet. Scan its league in Find bets (main lines are free), or <b>More bets</b> for its props, then ask again.', ['Check a bet']);
+  // which leagues: the ones asked for, else what's scanned, else popular ones in season
+  const scanned = Object.keys(state.results).filter(k => state.results[k].rows.some(r => r.start > now));
+  let leagues = p.sports && p.sports.length ? p.sports : scanned.length ? scanned
+    : POPULAR_LEAGUES.filter(k => !state.cfg.rundown_sports || state.cfg.rundown_sports.includes(k));
+  if (p.event_id) leagues = [...new Set(scannedRows().filter(r => r.event_id === p.event_id).map(r => r.sport_key))];
+  // refresh old or missing main lines for free, so answers use today's prices
+  const stale = leagues.filter(k => !state.results[k] || Date.now() - state.results[k].at > FRESH_MINUTES * 60000);
+  let refreshed = false;
+  if (stale.length && state.cfg.rundown && !state.cfg.demo && !p.event_id) {
+    const wait = addMsg('bot typing', `Getting fresh ${stale.map(leagueName).join(', ')} odds (free)…`);
+    try {
+      const sup = stale.filter(k => (state.cfg.rundown_sports || []).includes(k));
+      if (sup.length) { await chatScan(sup); refreshed = true; }
+    } catch (e) { /* use what's there */ }
+    wait.remove();
+  }
+  let rows = (p.here && state.shown && state.shown.length ? state.shown : scannedRows())
+    .filter(r => r.start > now && leagues.includes(r.sport_key) && inWindow(r, p.window));
+  if (p.event_id) rows = rows.filter(r => r.event_id === p.event_id);
+  const what = `${leagues.length && leagues.length <= 3 ? leagues.map(leagueName).join(', ') + ' ' : ''}${p.props ? 'player props' : 'bets'}${p.window === 'today' ? ' tonight' : p.window === 'tomorrow' ? ' tomorrow' : ''}`;
+  if (p.props) {
+    rows = rows.filter(r => r.player);
+    if (!rows.length) {
+      return botSay(`I don't have scanned ${what} yet. Player props come from The Odds API (about 4 credits a game), so I don't fetch them on my own: tick <b>Player props</b> and press Scan in Find bets, or use <b>More bets</b> for one game. Meanwhile I can show game lines.`,
+        [`Best ${leagues.map(leagueName)[0] || ''} game lines`.replace('  ', ' '), 'Safest bets tonight']);
+    }
   }
   if (!rows.length) {
-    return botSay(`I don't have any scanned bets yet. Go to <b>Find bets</b> and press Scan (main lines are free with TheRundown), then ask me again.`, ['Check a bet']);
+    return botSay(state.cfg.rundown
+      ? `I couldn't find any upcoming ${what}. ${p.window ? 'Try without "tonight" or "tomorrow", or ' : 'Try '}another league.`
+      : `I don't have scanned ${what}. Press Scan in Find bets, then ask me again.`, CHIPS_START);
   }
-  if (p.sports && p.sports.length) rows = rows.filter(r => p.sports.includes(r.sport_key));
-  if (p.props) rows = rows.filter(r => r.player);
-  const good = rows.filter(qualifies).sort((a, b) => b.ev - a.ev);
-  const item = (r, i) => `<button type="button" class="cpick" data-i="${i}"><b>${esc(betLabel(r))}</b> ${esc(r.american)}
-    <span class="muted small">${esc(r.event)}, ${when(r.start)} · ${pct(chance(r), 0)} chance · <span class="${r.ev > 0 ? 'up' : 'down'}">${signed(r.ev)}</span> value · ${confidence(r).label}</span></button>`;
-  const list = good.length ? good.slice(0, 5) : rows.slice().sort((a, b) => b.ev - a.ev).slice(0, 3);
-  CHAT.picks = list;
-  const head = good.length
-    ? `<b>Best ${good.length > 5 ? 5 : good.length} of ${good.length} qualifying picks</b> (positive value, medium confidence or better):`
-    : `<b>No qualifying picks right now</b> in ${rows.length ? 'these scans' : 'your scans'}. Closest by value, for reference only:`;
-  botSay(`${head}<div class="cpicks">${list.map(item).join('')}</div><span class="muted small">Tap one for full details. Even good-value bets lose often.</span>`,
-    ['Check a bet', 'How much should I bet?']);
+  await ensureStats(rows);
+  const mode = p.mode || 'value';
+  const picked = Calc.pickSides(rows, mode === 'likely' ? 'likely' : 'value', chance);
+  const latest = Math.max(...leagues.map(k => (state.results[k] || {}).at || 0));
+  const fresh = refreshed ? 'Fresh odds just now' : latest ? `Odds checked ${ago(latest)}` : '';
+  const freeOnly = picked.every(r => r.books_used.length <= 2);
+  const foot = `<span class="muted small">${fresh}${freeOnly ? ' · free odds: FanDuel compared with DraftKings and BetMGM only, so confidence is lower' : ''}. Tap a bet for full details. Even good bets lose often.</span>`;
+
+  // the same question again, with nothing new: say so and show something different
+  const key = JSON.stringify([leagues, p.props, p.window, mode, p.event_id || '', p.one]);
+  const again = CHAT.lastAsk && CHAT.lastAsk.key === key && !refreshed && Date.now() - CHAT.lastAsk.at < 15 * 60000;
+  CHAT.lastAsk = { key, at: Date.now() };
+  const same = again ? `<span class="muted small">Same as when you asked a moment ago: no new odds since then.</span><br>` : '';
+
+  if (mode === 'closest') {
+    return showList(`${same}<b>Closest to a fair price</b> (${what}): the smallest disadvantage first. ${picked.some(r => r.ev > 0) ? 'The top ones have real value.' : 'None has value right now.'}`,
+      picked.sort((a, b) => b.ev - a.ev), 'value', foot);
+  }
+  if (mode === 'likely') {
+    const list = picked.sort((a, b) => chance(b) - chance(a));
+    return showList(`${same}<b>Most likely to win</b> (${what}): the side the bot thinks will win, highest chance first. <span class="muted small">⚠ Poor price means likely, but FanDuel charges more than it's worth.</span>`, list, 'likely', foot,
+      ['Show more', 'Best value instead', 'Check a bet']);
+  }
+  if (mode === 'agree') {
+    const list = picked.filter(r => r.agree_sides).sort((a, b) => b.ev - a.ev);
+    if (!list.length) return botSay(`No ${what} where the best-value side is also the likelier side right now.`, ['Safest bets tonight', 'Best value instead']);
+    return showList(`${same}<b>Best value and most likely agree</b> (${what}): the side that's both the better deal and the likelier winner, best value first.`, list, 'agree', foot);
+  }
+  const good = picked.filter(r => r.ev > 0).sort((a, b) => b.ev - a.ev);
+  const solid = good.filter(qualifies);
+  if (p.one && good.length) {
+    const top = solid[0] || good[0];
+    CHAT.last = top;
+    CHAT.ctx = { kind: top.player ? 'player' : 'team', sport_key: top.sport_key, player: top.player || undefined,
+      team: top.pick_team || top.home_team, opponent: top.pick_team ? (top.pick_team === top.home_team ? top.away_team : top.home_team) : top.away_team,
+      market: top.market.replace(/^alternate_/, ''), outcome: top.outcome, point: top.point != null ? top.point : undefined, event_id: top.event_id };
+    const others = good.filter(r => r !== top);
+    showList(`${same}If you bet one thing, I'd take the <b>first one below</b>: ${esc(explain(top).verdict[2])} ${confidence(top).label} confidence.${others.length ? ' The others are the next best options.' : ''}`,
+      [top, ...others], 'value', foot, ['Why?', 'How much should I bet?', 'Show more']);
+    return;
+  }
+  if (solid.length) {
+    return showList(`${same}<b>${solid.length} good-value pick${solid.length === 1 ? '' : 's'}</b> (${what}): positive value, medium confidence or better, best first.`, solid.concat(good.filter(r => !solid.includes(r))), 'value', foot);
+  }
+  if (good.length) {
+    return showList(`${same}These ${what} beat FanDuel's price, but only with <b>low confidence</b>${freeOnly ? ' (only 2 books to compare with on the free odds)' : ''}, so treat them as leans:`, good, 'value', foot);
+  }
+  // nothing has value: explain, then show something useful instead of the same list again
+  const likely = picked.slice().sort((a, b) => chance(b) - chance(a));
+  const why = `<b>Nothing in ${esc(what)} beats the market right now</b> (${picked.length} checked). That's normal: FanDuel's prices are usually fair, and value tends to appear closer to game time or in player props${freeOnly ? '. On the free odds I can only compare with DraftKings and BetMGM, which makes edges harder to spot' : ''}.`;
+  if (again) {
+    const near = picked.slice().sort((a, b) => b.ev - a.ev);
+    return showList(`Still nothing new since I last checked (${fresh.toLowerCase()}). Here are the <b>closest to a fair price</b> instead: the smallest disadvantage, not value.`, near, 'value', foot,
+      ['Safest bets tonight', 'Show more', 'Check a bet']);
+  }
+  showList(`${why}<br>If you still want to bet, here's what the bot thinks is <b>most likely to win</b>:`, likely, 'likely', foot,
+    ['Show more', 'Closest to fair price', 'Check a bet']);
 }
 
 function recordAnswer() {
@@ -424,6 +572,7 @@ $('#chatChips').addEventListener('click', e => {
   const c = e.target.closest('.chip');
   if (!c) return;
   if (c.textContent === 'Bankroll') return chatSend('bankroll');
+  if (c.textContent === 'Best value instead') return chatSend('best value bets');
   chatSend(c.textContent);
 });
 $('#chatLog').addEventListener('click', e => {

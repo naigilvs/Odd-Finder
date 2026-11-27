@@ -86,6 +86,26 @@ class Reading(unittest.TestCase):
         self.assertEqual(chatbot.parse("what is kelly")["term"], "kelly")
         self.assertIn("Which game", chatbot.parse("over 224.5")["bets"][0]["problem"])
 
+    def test_ways_of_asking_for_picks(self):
+        def ask(text):
+            out = chatbot.parse(text)
+            return out["intent"], out.get("mode"), out.get("one"), out.get("window"), out["sports"]
+        self.assertEqual(ask("what should i bet on tonight"), ("best", "value", True, "today", []))
+        self.assertEqual(ask("best nba picks"), ("best", "value", False, None, ["basketball_nba"]))
+        self.assertEqual(ask("safest bets tonight")[:2], ("best", "likely"))
+        self.assertEqual(ask("any locks?")[:2], ("best", "likely"))
+        self.assertEqual(ask("nba favorites")[1], "likely")
+        self.assertEqual(ask("picks where both agree")[1], "agree")
+        self.assertEqual(ask("closest to fair price")[1], "closest")
+        self.assertEqual(ask("what do u recommend")[0], "best")
+        self.assertEqual(ask("give me a pick")[2], True)
+        self.assertEqual(ask("any good bets tomorrow")[3], "tomorrow")
+        for text in ("more", "show more", "what else", "next"):
+            self.assertEqual(chatbot.parse(text)["intent"], "more", text)
+        # a recommendation question still works mid-conversation about another bet
+        ctx = {"kind": "player", "sport_key": "basketball_nba", "player": "Nikola Jokic", "team": "Denver Nuggets"}
+        self.assertEqual(chatbot.parse("what should i bet on", ctx)["intent"], "best")
+
     def test_shared_last_names(self):
         out = chatbot.parse("brown over 12.5 points")
         self.assertEqual(out["intent"], "choose")
