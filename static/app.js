@@ -34,6 +34,7 @@ async function getJSON(url) {
 /* ---------------- start screen ---------------- */
 function showStart() {
   $('#app').hidden = true;
+  document.body.classList.add('on-start');
   $('#start').hidden = false;
   const live = state.cfg.books.map(b =>
     `<button class="ticket live" data-book="${b.key}"><b>${esc(b.name)}</b><small>Ready to scan</small></button>`);
@@ -54,6 +55,7 @@ async function pickBook(key) {
   Object.keys(state.results).forEach(k => { if (!unticked.has(k)) state.picked.add(k); });
   $('#start').hidden = true;
   $('#app').hidden = false;
+  document.body.classList.remove('on-start');
   $('#bookName').textContent = state.book.name;
   $('#demoBar').hidden = !state.cfg.demo;
   // Old servers don't send `outdated`; a page newer than its server is the same problem.
@@ -696,6 +698,7 @@ function betDetails(r) {
         : `<button class="btn-save" id="bmSave">☆ Save pick</button>
            <label>Stake (optional) $<input id="bmStake" type="number" min="0" step="1" placeholder="${stakeSuggestion(r).stake || 0}"></label>`}
       <span class="bm-stake">${stakeSuggestion(r).text}</span>
+      <button class="linkbtn" id="bmAsk" type="button">💬 Ask about this bet</button>
     </div>
     <div class="bm-verdict ${tone}"><b>${title}.</b>${esc(line)}</div>
     <div class="bm-nums">
@@ -750,6 +753,7 @@ function openBet(r) {
   $('#bmBody').innerHTML = betDetails(r);
   $('#betModal').showModal();
   $('#bmBody .close').onclick = () => $('#betModal').close();
+  $('#bmAsk').onclick = () => askAboutBet(r);
   $('#bmSave').onclick = async () => {
     const stake = $('#bmStake') ? +$('#bmStake').value || null : null;
     await toggleSave(r, stake);

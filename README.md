@@ -30,6 +30,16 @@ To try it without a key, run `python3 app.py --demo`. It uses made-up teams and 
 - Player props cost up to about 4 credits per game, for at most 8 games per sport per scan.
 - The number of credits left is shown next to the Scan button.
 
+## Chat
+
+A chat button (💬 Ask, bottom right; also **Chat** in the ☰ menu and **Ask about this bet** in each bet's pop-up) opens a chatbot. It isn't an AI: it recognizes a set of question types and answers only from the bot's own numbers, so it never makes up a stat. Examples:
+
+- **Check a bet:** `Jokic over 11.5 rebounds -120`, `Knicks -4.5`, `Lakers ML +130`, `Chiefs Bills over 45.5`. It finds the next game and gives the chance of success, value at your odds (or FanDuel's), fair odds, confidence, reasons and risks, recent form against the line, injury news and a suggested stake. Each answer says what it's based on: **Full check** (your scan, or free market odds from TheRundown for moneylines, spreads and totals), **Stats only** (no market price, e.g. a prop that hasn't been scanned: rougher), or that it can't judge.
+- **Compare:** `Knicks -4.5 or Knicks Celtics over 224.5`. **Best bets:** `best NBA props tonight`, `best bets here` (the list on screen).
+- **Players and teams:** `Jalen Brunson`, `McDavid last 10 shots`, `is Embiid playing`. **You:** `how am I doing`, `bankroll`, `my picks`, `how much should I bet`. **The bot:** `is the bot working`. **Terms:** `what's a push`, `what is Kelly`.
+
+Players and teams are recognized from the saved box scores and results (short names, nicknames and typos are fine; it asks when a last name fits several players). It doesn't search the internet. Questions it doesn't understand are saved on this computer in `data/chat_unknown.json` so new question types can be added.
+
 ## Free main lines from TheRundown (no credits)
 
 With a free TheRundown key in `config.json` (`"therundown_key": "..."`; sign up at therundown.io), an **Odds from** menu appears next to Scan. **TheRundown (free)** loads full-game moneylines, spreads and totals without using any Odds API credits: its free plan allows 20,000 "data points" a day (about 20 per game; the number left shows under the Scan button) and resets at midnight UTC. Each game is matched to The Odds API's game list (a free call), so ids, team names, logos, saved picks and the results tracker stay the same whichever source you use.
@@ -110,6 +120,7 @@ Results are saved in your browser until the games start. Alternate lines and tea
 - `stats.py`: the stats second opinion from past results.
 - `injuries.py`: ESPN's injury report for the NBA, NHL and NFL.
 - `rundown.py`: free main-line odds from TheRundown.
+- `chatbot.py`, `static/chat.js`: the chat.
 - `static/index.html`, `static/app.css`, `static/app.js`: the page's layout, styling and behavior.
 - `static/calc.js`: the page's calculations (chance of success, confidence, best line per bet).
 - `tests/`: automated tests.

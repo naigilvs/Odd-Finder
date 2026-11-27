@@ -31,6 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import backup
+import chatbot
 import injuries
 import picks
 import props_stats
@@ -683,6 +684,99 @@ def closing_scans():
         time.sleep(300)
 
 
+# --------------------------------------------------------------------------- chatbot
+
+def upcoming_games(sport, started_hours=0):
+    """Upcoming games in one league as Odds API-style events: its free game list, or
+    TheRundown's free schedule if that fails. Games that started more than `started_hours`
+    ago are left out (0: only games not started yet)."""
+    now = datetime.now(timezone.utc) - timedelta(hours=started_hours)
+    try:
+        games = api_get(f"/sports/{sport}/events")
+    except ApiError:
+        games = []
+        if RUNDOWN_KEY and sport in rundown.SPORT_IDS:
+            try:
+                games = rundown.fetch_events(RUNDOWN_KEY, sport, sport_title(sport))
+            except rundown.RundownError:
+                games = []
+    return sorted((g for g in games if parse_time(g["commence_time"]) > now), key=lambda g: g["commence_time"])
+
+
+def chat_bet(bet):
+    """Fill in one bet from the chat: its next game, the stats chance, the free market price
+    (moneylines, spreads, totals), injury news and recent form. The page does the rest with
+    the same calculations as everywhere else."""
+    sport, kind = bet.get("sport_key"), bet.get("kind")
+    if kind not in ("team", "player") or not sport:
+        return bet
+    team, opp = bet.get("team"), bet.get("opponent")
+    game = next((g for g in upcoming_games(sport)
+                 if (stats._same_team(team, g["home_team"]) and (not opp or stats._same_team(opp, g["away_team"])))
+                 or (stats._same_team(team, g["away_team"]) and (not opp or stats._same_team(opp, g["home_team"])))), None)
+    if kind == "player":
+        markets = [bet["market"]] if bet.get("market") else list(props_stats.SPORTS.get(sport, {}).get("markets", {}))
+        forms = {m: chatbot.player_form(sport, bet["player"], m, bet.get("point") if m == bet.get("market") else None) for m in markets}
+        bet["forms"] = {m: f for m, f in forms.items() if f and (f["last10"]["avg"] > 0 or m == bet.get("market"))}
+    else:
+        bet["forms"] = {t: chatbot.team_form(sport, t) for t in (team, opp) if t}
+    if not game:
+        live = next((g for g in upcoming_games(sport, started_hours=5)
+                     if stats._same_team(team, g["home_team"]) or stats._same_team(team, g["away_team"])), None)
+        if live and parse_time(live["commence_time"]) <= datetime.now(timezone.utc):
+            bet["error"] = (f"{live['away_team']} @ {live['home_team']} has already started. The bot only checks bets "
+                            f"before the start, because live odds move too fast.")
+        else:
+            bet["error"] = f"I couldn't find an upcoming {team} game in the schedule."
+        return bet
+    home, away = game["home_team"], game["away_team"]
+    bet.update(event_id=game["id"], home=home, away=away, start=game["commence_time"], event=f"{away} @ {home}",
+               sport=game.get("sport_title") or sport_title(sport))
+    if kind == "team" and not opp:
+        bet["opponent"] = away if stats._same_team(team, home) else home
+    inj = injuries.lookup([{"key": "chat", "sport_key": sport, "player": bet.get("player"), "home": home, "away": away}])
+    bet["injury"], bet["injury_teams"], bet["injury_updated"] = inj["injuries"].get("chat"), inj["teams"], inj["updated"]
+    market = bet.get("market")
+    if not market or bet.get("problem"):
+        return bet
+    if market in ("h2h", "spreads"):
+        bet["outcome"] = home if stats._same_team(team, home) else away     # the game's own spelling
+    selection = describe(market, {"name": bet["outcome"], "point": bet.get("point"), "description": bet.get("player")})
+    bet.update(selection=selection, market_label=market_label(market))
+    found, pending = stats.predict_many([{"key": "chat", "sport_key": sport, "market": market, "outcome": bet["outcome"],
+                                          "point": bet.get("point"), "home": home, "away": away, "player": bet.get("player")}])
+    bet["stats"], bet["stats_pending"] = found.get("chat"), bool(pending)
+    if market in ("h2h", "spreads", "totals") and RUNDOWN_KEY and not DEMO and sport in rundown.SPORT_IDS:
+        try:
+            evs = rundown.fetch_day(RUNDOWN_KEY, sport, bet["sport"], rundown.local_day(game["commence_time"]))
+        except rundown.RundownError:
+            evs = []
+        rundown.match_ids(evs, [game])
+        ev = next((e for e in evs if e["id"] == game["id"]), None)
+        rows = analyze_event(ev, "fanduel", 1) if ev else []
+        row = next((r for r in rows if r["market"] == market and r["selection"] == selection), None)
+        if row:
+            bet["row"] = dict(row, scanned_at=None, source="TheRundown (free)")
+        else:
+            alt = next((r for r in rows if r["market"] == market and r["outcome"] == bet["outcome"]), None)
+            if alt:
+                bet["fd_line"] = {"selection": alt["selection"], "american": alt["american"], "point": alt["point"]}
+    return bet
+
+
+def chat_answer(message):
+    """What the chat message asks, with the data the page needs to answer it."""
+    p = chatbot.parse(message)
+    if p["intent"] == "unknown":
+        chatbot.log_unknown(message)
+    for b in p.get("bets", []):
+        try:
+            chat_bet(b)
+        except Exception as e:   # one lookup failing shouldn't break the reply
+            b["error"] = f"Something went wrong looking that up: {e}"
+    return p
+
+
 def run_scan(target, sports, include_props, min_books, source="odds_api"):
     now = datetime.now(timezone.utc)
     rows, errors = [], []
@@ -808,7 +902,7 @@ def demo_events(sport, target, include_props):
     return events
 
 
-CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py", ROOT / "props_stats.py", ROOT / "wagers.py", ROOT / "injuries.py", ROOT / "rundown.py"]
+CODE_FILES = [ROOT / "app.py", ROOT / "stats.py", ROOT / "picks.py", ROOT / "backup.py", ROOT / "scans.py", ROOT / "props_stats.py", ROOT / "wagers.py", ROOT / "injuries.py", ROOT / "rundown.py", ROOT / "chatbot.py"]
 _started_with = {f: f.stat().st_mtime for f in CODE_FILES if f.exists()}
 
 
@@ -972,7 +1066,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans", "/api/wagers", "/api/injuries"):
+        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans", "/api/wagers", "/api/injuries", "/api/chat"):
             return self.send_json({"error": "Not found"}, 404)
         length = int(self.headers.get("Content-Length") or 0)
         if length > 20_000_000:          # room for a full browser copy of saved scans
@@ -1006,6 +1100,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/images":
             found, pending = IMAGES.get(items)
             return self.send_json({"images": found, "pending": pending})
+        if path == "/api/chat":
+            return self.send_json(chat_answer(str(body.get("message") or "")[:500]))
         if path == "/api/injuries":
             return self.send_json(injuries.lookup(items, demo_injury_report if DEMO else injuries.report))
         if DEMO:

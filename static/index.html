@@ -47,6 +47,7 @@
     <button class="side-item" data-page="find" aria-current="page"><span class="ico" aria-hidden="true">🔎</span><span>Find bets<small>Main lines and more bets</small></span></button>
     <button class="side-item" data-page="picks"><span class="ico" aria-hidden="true">★</span><span>My picks <span class="count" id="sideCount"></span><small>Bets you saved, open and settled</small></span></button>
     <button class="side-item" data-page="wagers"><span class="ico" aria-hidden="true">💵</span><span>My wagers<small>Log what you bet and won or lost</small></span></button>
+    <button class="side-item" data-chat><span class="ico" aria-hidden="true">💬</span><span>Chat<small>Ask about bets, picks and your record</small></span></button>
     <button class="side-item" data-page="bot"><span class="ico" aria-hidden="true">📈</span><span>Bot results<small>How the bot's predictions turned out</small></span></button>
     <div class="side-foot">
       <div class="side-backup" id="sideBackup" role="status"></div>
@@ -281,7 +282,20 @@
   <div class="bm" id="bmBody"></div>
 </dialog>
 
+<button class="chat-fab" id="chatFab" aria-label="Open chat">💬 Ask</button>
+<aside class="chat" id="chatPanel" aria-label="Chat" hidden>
+  <header><b>Chat</b><span class="muted small">Answers from the bot's own numbers</span>
+    <button type="button" id="chatFull" class="linkbtn" aria-label="Full screen" title="Full screen">⤢</button>
+    <button type="button" id="chatClose" class="linkbtn" aria-label="Close chat">×</button></header>
+  <div class="chat-log" id="chatLog" role="log" aria-live="polite"></div>
+  <div class="chat-chips" id="chatChips"></div>
+  <form class="chat-form" id="chatForm">
+    <input id="chatInput" maxlength="300" autocomplete="off" placeholder="e.g. Jokic over 11.5 rebounds −120" aria-label="Message">
+    <button class="btn-scan" type="submit">Send</button>
+  </form>
+</aside>
 <script src="/static/calc.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/chat.js"></script>
 </body>
 </html>

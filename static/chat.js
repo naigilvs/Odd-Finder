@@ -1,0 +1,394 @@
+/*
+ * Odd Finder chat: a chatbot (no AI) that answers from the bot's own numbers.
+ * The server reads the question and looks up players, games, stats, free market odds,
+ * injuries and form (/api/chat); this file builds the answer with the same calculations the
+ * rest of the page uses (chance of success, confidence, value, suggested stake).
+ * Uses helpers from app.js, which loads first.
+ */
+const CHAT = { last: null, busy: false, started: false };
+
+const TERM_TEXT = {
+  push: 'A <b>push</b> is a tie with the line, like a spread of −3 when the team wins by exactly 3. You get your stake back: no win, no loss.',
+  vig: 'The <b>vig</b> (juice, margin) is the sportsbook\'s cut. At −110 on both sides you risk $110 to win $100, so the book keeps about 4.5% over many bets. The bot removes it to find the fair chance.',
+  value: '<b>Value</b> (expected value) is how much a bet is worth over many tries: chance of winning × payout − 1. +3% means about +$3 per $100 in the long run. It isn\'t a promise for any single bet.',
+  kelly: '<b>Kelly</b> sizes a bet by its edge: (chance × decimal odds − 1) ÷ (decimal odds − 1) of your bankroll. Full Kelly is aggressive, so the bot suggests a fraction (quarter Kelly by default) and caps it.',
+  parlay: 'A <b>parlay</b> joins several bets into one: all legs must win. The odds multiply, so it pays a lot, but the chances multiply too and the sportsbook\'s cut stacks up on every leg.',
+  spread: 'A <b>spread</b> evens out two teams. Knicks −4.5 must win by 5 or more; the other side at +4.5 wins if it loses by 4 or less, or wins.',
+  moneyline: 'A <b>moneyline</b> is a bet on who wins the game, no points involved. −150 is the favorite (risk $150 to win $100); +130 is the underdog (risk $100 to win $130).',
+  total: 'A <b>total</b> (over/under) is a bet on the combined score. Over 224.5 wins if both teams score 225 or more together.',
+  clv: '<b>Closing line value</b> compares the price you got with the market\'s fair price right before the game. Beating the close regularly is the best early sign of real value. See it in Bot results.',
+  units: 'A <b>unit</b> is a fixed slice of your bankroll, usually 1%. Results in units compare fairly however much you bet. Set yours in My wagers → Bankroll settings.',
+  odds: '<b>American odds</b>: +150 means a $100 bet wins $150; −150 means you bet $150 to win $100. Plus is the underdog, minus the favorite.',
+  implied: 'The <b>implied probability</b> is the chance a price suggests: −150 → 60%, +150 → 40%. It includes the sportsbook\'s cut, so both sides add up to more than 100%.',
+  confidence: '<b>Confidence</b> is how much to trust the chance of success: how many sportsbooks it\'s compared with, whether sharp books are included, whether stats agree, and injury news. It isn\'t the chance of winning.',
+  chance: '<b>Chance of success</b> is the bot\'s estimate that the bet wins: 75% the market\'s fair price (sportsbooks with their cut removed) and 25% the stats models, when stats cover the bet.',
+  fair: 'The <b>fair price</b> is what the odds would be with no sportsbook cut, from the bet\'s chance of success. If the real odds pay more than the fair price, the bet has value.',
+  prop: 'A <b>player prop</b> is a bet on one player\'s stat, like LeBron over 24.5 points.',
+  line: 'The <b>line</b> is the number in a bet: −4.5 in a spread, 224.5 in a total, 24.5 in a player prop.',
+  favorite: 'The <b>favorite</b> is expected to win (minus odds); the <b>underdog</b> isn\'t (plus odds). Underdogs pay more but win less often.',
+  sharp: '<b>Sharp sportsbooks</b> like Pinnacle take big bets from pros and move their prices fast, so their prices are the most accurate. The bot weights them most.',
+  bankroll_term: 'Your <b>bankroll</b> is the money set aside only for betting. Sizing bets as a small share of it keeps a losing streak from wiping you out.',
+  alt: 'An <b>alternate line</b> is the same bet at another number, like −7.5 instead of −4.5, at different odds.',
+  b2b: 'A <b>back-to-back</b> is two games on consecutive days. Tired teams can play worse, but in the bot\'s tests rest didn\'t make predictions more accurate.',
+};
+
+const CHIPS_START = ['Best bets tonight', 'Check a bet', 'How am I doing?', 'Is the bot working?', "What's a push?"];
+const CHIPS_AFTER_BET = ['How much should I bet?', 'Full details', 'Best bets tonight'];
+
+// ---- the panel
+function openChat(full) {
+  $('#chatPanel').hidden = false;
+  $('#chatPanel').classList.toggle('full', !!full);
+  $('#chatFab').hidden = true;
+  if (!CHAT.started) {
+    CHAT.started = true;
+    botSay(`Hi! I answer from the bot's own numbers: scans, stats models, injuries and your records. Ask me about a bet, like <i>Jokic over 11.5 rebounds −120</i> or <i>Knicks −4.5</i>, or tap a suggestion.`, CHIPS_START);
+  }
+  $('#chatInput').focus();
+}
+function closeChat() {
+  $('#chatPanel').hidden = true;
+  $('#chatFab').hidden = false;
+}
+
+function addMsg(who, html) {
+  const div = document.createElement('div');
+  div.className = `cmsg ${who}`;
+  div.innerHTML = html;
+  $('#chatLog').appendChild(div);
+  $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
+  return div;
+}
+function botSay(html, chips) {
+  const div = addMsg('bot', html);
+  setChips(chips || []);
+  return div;
+}
+function setChips(list) {
+  $('#chatChips').innerHTML = list.map(c => `<button type="button" class="chip">${esc(c)}</button>`).join('');
+}
+
+async function chatSend(text) {
+  text = text.trim();
+  if (!text || CHAT.busy) return;
+  addMsg('me', esc(text));
+  $('#chatInput').value = '';
+  if (text === 'Check a bet') {
+    return botSay('Type the bet with its odds, for example <i>LeBron over 24.5 points −115</i>, <i>Celtics ML +120</i> or <i>Chiefs Bills over 45.5</i>. No odds? I\'ll use FanDuel\'s when I can.');
+  }
+  if (text === 'Full details') return CHAT.last ? openBet(CHAT.last) : botSay('Check a bet first, then I can open its full details.');
+  CHAT.busy = true;
+  const wait = addMsg('bot typing', '…');
+  try {
+    const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text }) });
+    const p = await r.json();
+    wait.remove();
+    if (!r.ok || p.error) throw new Error(p.error || r.statusText);
+    await answer(p, text);
+  } catch (e) {
+    wait.remove();
+    botSay(`Sorry, something went wrong: ${esc(e.message)}`);
+  }
+  CHAT.busy = false;
+}
+
+// ---- answers
+async function answer(p, text) {
+  switch (p.intent) {
+    case 'help': return botSay(helpText(), CHIPS_START);
+    case 'term': return botSay(TERM_TEXT[p.term] || 'I don\'t have an explanation for that yet.', ['Best bets tonight', 'Check a bet']);
+    case 'record': return botSay(recordAnswer(), ['Bankroll', 'Is the bot working?']);
+    case 'bankroll': return botSay(bankrollAnswer(), ['How am I doing?', 'Best bets tonight']);
+    case 'picks': return botSay(picksAnswer(), ['Best bets tonight', 'How am I doing?']);
+    case 'bot': return botSay(await botAnswer(), ['Best bets tonight', "What's CLV?"]);
+    case 'best': return bestAnswer(p);
+    case 'choose': {
+      const names = p.bets[0].choices;
+      return botSay(`Which player did you mean?`, names.map(n => `${n.replace(/ \(.*\)$/, '')} ${text}`.slice(0, 120)));
+    }
+    case 'stake':
+      if (p.bets && p.bets[0] && p.bets[0].market) return checkAnswer(p.bets[0], true);
+      return CHAT.last ? botSay(stakeLine(CHAT.last), CHIPS_AFTER_BET)
+        : botSay('Which bet? Check one first, like <i>Knicks −4.5 −110</i>, then ask how much to bet.');
+    case 'check': return checkAnswer(p.bets[0]);
+    case 'compare': return compareAnswer(p.bets);
+    case 'injury': return botSay(injuryAnswer(p.bets[0]), ['Best bets tonight']);
+    case 'form': return botSay(formAnswer(p.bets[0], true), ['Best bets tonight']);
+    case 'about': return botSay(aboutAnswer(p.bets[0]), ['Best bets tonight']);
+    default:
+      return botSay(`I didn't understand that one, sorry. I've saved it so I can learn it later. Here's what I can do:<br>${helpText()}`, CHIPS_START);
+  }
+}
+
+function helpText() {
+  return `<ul class="chelp">
+    <li><b>Check a bet:</b> <i>Jokic over 11.5 rebounds −120</i>, <i>Knicks −4.5</i>, <i>Lakers ML +130</i>, <i>Chiefs Bills over 45.5</i></li>
+    <li><b>Compare:</b> <i>Knicks −4.5 or Knicks Celtics over 224.5</i></li>
+    <li><b>Best bets:</b> <i>best NBA props tonight</i>, <i>best bets here</i> (the list on your screen)</li>
+    <li><b>Players and teams:</b> <i>Jalen Brunson</i>, <i>McDavid last 10 shots</i>, <i>is Embiid playing</i></li>
+    <li><b>You:</b> <i>how am I doing</i>, <i>bankroll</i>, <i>my picks</i>, <i>how much should I bet</i></li>
+    <li><b>The bot:</b> <i>is the bot working</i>; <b>terms:</b> <i>what's a push</i>, <i>what is Kelly</i></li></ul>`;
+}
+
+// Every scanned bet the page has (main lines and More bets).
+const scannedRows = () => Object.values(state.results).flatMap(v => v.rows).concat(more.rows);
+
+function findScanned(bet) {
+  return scannedRows().find(r => r.event_id === bet.event_id && r.selection === bet.selection
+    && (r.market === bet.market || r.market === 'alternate_' + bet.market));
+}
+
+// The bet as a row like the scan's, so chance, confidence, value and the pop-up all work.
+function chatRow(bet) {
+  const scanned = findScanned(bet);
+  const s = bet.stats && bet.stats.prob != null ? bet.stats : null;
+  let row, based;
+  if (scanned) { row = { ...scanned }; based = ['full', 'Full check: from your scan'] }
+  else if (bet.row) { row = { ...bet.row }; based = ['full', 'Full check: free market odds (FanDuel vs DraftKings and BetMGM)'] }
+  else if (s) {
+    row = { event_id: bet.event_id, sport_key: bet.sport_key, sport: bet.sport, event: bet.event, home_team: bet.home,
+      away_team: bet.away, start: bet.start, market: bet.market, market_label: bet.market_label, selection: bet.selection,
+      outcome: bet.outcome, point: bet.point, player: bet.player || null, labeled: true, books_used: [], compare: [],
+      sharp: false, fair_prob: s.prob, stats_only: true, decimal: null };
+    based = ['stats', bet.player ? 'Stats only: no market price for this prop without a scan, so it\'s rougher' : 'Stats only: no market price found, so it\'s rougher'];
+  } else return { row: null };
+  if (bet.decimal) {                                 // your odds, not FanDuel's
+    Object.assign(row, { decimal: bet.decimal, american: (bet.odds > 0 ? '+' : '') + bet.odds,
+      book_prob: Math.round(10000 / bet.decimal) / 10000, ev: Math.round((row.fair_prob * bet.decimal - 1) * 10000) / 10000, user_odds: true });
+  } else if (row.stats_only) {
+    row.ev = null;
+  }
+  const k = statKey(row);
+  if (bet.stats && !(k in STATS.known)) STATS.known[k] = bet.stats;
+  if (bet.injury) { INJ.known[k] = bet.injury; Object.assign(INJ.teams, bet.injury_teams || {}); Object.assign(INJ.updated, bet.injury_updated || {}); }
+  return { row, based };
+}
+
+function verdictOf(row) {
+  if (!row.decimal) return ['ok', 'Need the odds', 'Tell me the odds (e.g. −115) and I\'ll say whether the price is worth it.'];
+  if (row.stats_only) {                    // no market price: the stats' opinion alone, so softer words
+    return row.ev > 0.03 ? ['ok', 'Possible value, stats only', 'The stats think this price pays more than the bet is worth, but there\'s no market price to confirm it.']
+      : row.ev > 0 ? ['ok', 'Slight value by the stats', 'A small edge by the stats alone: rough, so treat it as a lean.']
+      : row.ev > -0.02 ? ['ok', 'About a fair price', 'By the stats, this price is close to what the bet is worth.']
+      : ['bad', 'Not worth it at this price', 'By the stats, this price pays less than the bet is worth.'];
+  }
+  return explain(row).verdict;
+}
+
+// Reasons for a stats-only check, without the market words the full check uses.
+function statsOnlyReasons(row, bet) {
+  const s = bet.stats || {}, good = [], risk = [];
+  if (s.expected_stat != null) good.push(`From ${bet.player}'s recent games, minutes and the opponent's defense, the stats expect about ${s.expected_stat} ${s.stat_name}, against a line of ${row.point}.`);
+  if (s.form_home && s.form_away) good.push(`Last 10 games: ${bet.away} ${s.form_away}, ${bet.home} ${s.form_home}.`);
+  if (row.decimal) risk.push(`At ${row.american} the price implies a ${pct(1 / row.decimal)} chance; the stats give it ${pct(row.fair_prob)}.`);
+  risk.push('No market price to compare with, so this is the stats\' opinion alone: rougher than a full check.' +
+    (bet.player ? ' Scan this game\'s player props for a full check.' : ''));
+  return { good, risk };
+}
+
+function checkAnswer(bet, stakeToo) {
+  if (!bet || bet.problem) return botSay(bet && bet.problem ? esc(bet.problem) : 'Tell me the bet, like <i>Knicks −4.5 −110</i>.');
+  if (bet.error) return botSay(`${esc(bet.error)}${formAnswer(bet) ? `<br>${formAnswer(bet)}` : ''}`, ['Best bets tonight']);
+  const { row, based } = chatRow(bet);
+  if (!row) {
+    const why = bet.stats_pending ? 'The stats models are still loading (the first start takes a minute or two). Ask me again shortly.'
+      : bet.stats && bet.stats.reason ? `I can't judge this one: ${esc(bet.stats.reason.toLowerCase())}, and there's no market price for it without a scan.`
+      : 'I can\'t judge this one: no market price and no stats cover it.';
+    return botSay(`<b>${esc(bet.selection || bet.player || bet.team)}</b><br>${why}${formAnswer(bet) ? `<br>${formAnswer(bet)}` : ''}`, ['Best bets tonight']);
+  }
+  CHAT.last = row;
+  const ch = chance(row), [tone, title, line] = verdictOf(row);
+  const c = row.stats_only ? { label: 'Low' } : confidence(row);
+  const ex = row.stats_only ? statsOnlyReasons(row, bet) : row.decimal ? explain(row) : { good: [], risk: [] };
+  const fair = americanOdds(1 / ch);
+  const odds = row.decimal ? `${row.american}${row.user_odds ? ' (your odds)' : ` (${esc(state.book ? state.book.name : 'FanDuel')})`}` : '–';
+  const extra = [];
+  if (bet.fd_line && !findScanned(bet)) extra.push(`FanDuel's current line is <b>${esc(bet.fd_line.selection)} ${esc(bet.fd_line.american)}</b>; you asked about a different number.`);
+  const f = formAnswer(bet);
+  if (f) extra.push(f);
+  const inj = (INJ.known[statKey(row)] || {}).player;
+  if (inj) extra.push(`<span class="inj ${inj.level}">⚠ ${esc(inj.name)}: ${esc(inj.status)}</span> ${esc(inj.comment || '')}`);
+  else if (!bet.player && bet.injury_teams) extra.push(teamInjuries(bet));
+  if (row.decimal) extra.push(stakeSuggestion(row).text);
+  const html = `
+    <div class="cbet">
+      <b>${esc(betLabel(row))}</b><span class="muted small">${esc(row.event)}, ${when(row.start)}</span>
+      <div class="cverdict ${tone}"><b>${esc(title)}.</b> ${esc(line)}</div>
+      <div class="cnums">
+        <div><b>${pct(ch, 0)}</b>chance</div>
+        <div><b>${row.ev != null ? signed(row.ev) : '–'}</b>value</div>
+        <div><b>${odds}</b>odds</div>
+        <div><b>${fair}</b>fair odds</div>
+        <div><b>${c.label}</b>confidence</div>
+      </div>
+      <span class="cbased ${based[0]}">${esc(based[1])}</span>
+      ${ex.good.length ? `<ul class="good">${ex.good.slice(0, 2).map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+      ${ex.risk.length ? `<ul class="risk">${ex.risk.slice(0, 3).map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+      ${extra.map(x => `<p>${x}</p>`).join('')}
+    </div>`;
+  const div = botSay(html, CHIPS_AFTER_BET);
+  if (stakeToo && row.decimal) botSay(stakeLine(row), CHIPS_AFTER_BET);
+  return div;
+}
+
+function stakeLine(row) {
+  if (!row.decimal) return 'I need the odds to size a bet: tell me the price, like <i>−115</i>.';
+  return `${stakeSuggestion(row).text} <span class="muted">Even a good bet loses often, so keep each bet small.</span>`;
+}
+
+function compareAnswer(bets) {
+  const parts = bets.map(b => ({ b, ...(b.error || b.problem ? { row: null } : chatRow(b)) }));
+  parts.forEach(x => checkAnswer(x.b));
+  const ok = parts.filter(x => x.row);
+  if (ok.length < 2) return;
+  const [a, b] = ok;
+  const val = x => x.row.ev != null ? x.row.ev : -1;
+  const better = val(a) === val(b) ? (chance(a.row) >= chance(b.row) ? a : b) : val(a) > val(b) ? a : b;
+  const likelier = chance(a.row) >= chance(b.row) ? a : b;
+  botSay(`<b>Comparing:</b> ${esc(betLabel(better.row))} has the better value${better === likelier ? ' and the better chance'
+    : `, while ${esc(betLabel(likelier.row))} is more likely to win but pays less for it`}. The bot ranks by value: over many bets, that's what pays.`, CHIPS_AFTER_BET);
+}
+
+function teamInjuries(bet) {
+  const lists = Object.entries(bet.injury_teams || {}).map(([k, ps]) => [k.split('|').slice(1).join('|'), ps.filter(p => p.level !== 'question' || ps.length < 6)]);
+  const txt = lists.map(([team, ps]) => ps.length
+    ? `<b>${esc(team)}</b>: ${ps.slice(0, 5).map(p => `${esc(p.name)} (${esc(p.status)})`).join(', ')}${ps.length > 5 ? ` and ${ps.length - 5} more` : ''}`
+    : `<b>${esc(team)}</b>: nobody listed`).join('<br>');
+  return txt ? `Injury report:<br>${txt}` : '';
+}
+
+function formAnswer(bet, wantAll) {
+  const forms = bet && bet.forms;
+  if (!forms) return '';
+  if (bet.kind === 'player') {
+    const list = Object.entries(forms).filter(([m, f]) => f && (wantAll || m === bet.market));
+    if (!list.length) return '';
+    return list.map(([, f]) => {
+      const ov = blk => f.line != null && blk.over != null ? `, over ${f.line} in ${blk.over} of ${blk.games}` : '';
+      return `<b>${esc(bet.player)}, ${esc(f.stat)}:</b> last 5 avg ${f.last5.avg}${ov(f.last5)}; last 10 avg ${f.last10.avg}${ov(f.last10)}; last 20 avg ${f.last20.avg}${ov(f.last20)}.` +
+        (f.home_avg != null && f.away_avg != null ? ` Home ${f.home_avg}, away ${f.away_avg}.` : '') +
+        (wantAll ? `<br><span class="muted small">Recent: ${f.recent.map(g => `${g.value} ${g.home ? 'vs' : '@'} ${esc(nick(g.opp))}`).join(', ')}</span>` : '');
+    }).join('<br>');
+  }
+  return Object.entries(forms).filter(([, f]) => f).map(([team, f]) =>
+    `<b>${esc(team)}</b> last ${f.games.length}: ${f.record}, scoring ${f.for} and allowing ${f.against} on average.` +
+    (wantAll ? `<br><span class="muted small">${f.games.map(g => `${g.result} ${g.score} ${g.home ? 'vs' : '@'} ${esc(nick(g.opp))}`).join(', ')}</span>` : '')).join('<br>');
+}
+
+function injuryAnswer(bet) {
+  if (!bet || bet.error) return esc(bet && bet.error || 'Who? Try a player or team name.');
+  if (bet.kind === 'player') {
+    const p = bet.injury && bet.injury.player;
+    if (!['basketball_nba', 'icehockey_nhl', 'americanfootball_nfl'].includes(bet.sport_key)) return 'Injury reports cover the NBA, NHL and NFL only.';
+    return p ? `<span class="inj ${p.level}">⚠ ${esc(p.name)}: ${esc(p.status)}</span> ${esc(p.comment || '')}${p.returns ? ` Expected back around ${esc(p.returns)}.` : ''}`
+      : `${esc(bet.player)} isn't on ESPN's injury report${bet.event ? ` for ${esc(bet.event)}, ${when(bet.start)}` : ''}.`;
+  }
+  return teamInjuries(bet) || 'No injury report for that league.';
+}
+
+function aboutAnswer(bet) {
+  if (!bet) return helpText();
+  const parts = [];
+  if (bet.event) parts.push(`Next game: <b>${esc(bet.event)}</b>, ${when(bet.start)}.`);
+  else if (bet.error) parts.push(esc(bet.error));
+  const inj = injuryAnswer(bet);
+  if (inj && !bet.error) parts.push(inj);
+  const f = formAnswer(bet, false);
+  if (f) parts.push(f);
+  parts.push(`Ask about a bet, like <i>${esc((bet.player || bet.team || '').split(' ').slice(-1)[0])} ${bet.kind === 'player' ? 'over 20.5 points' : '−4.5'}</i>.`);
+  return parts.join('<br>');
+}
+
+function bestAnswer(p) {
+  const now = new Date().toISOString();
+  let rows = p.here && state.shown && state.shown.length ? state.shown : scannedRows();
+  rows = rows.filter(r => r.start > now);
+  if (!rows.length) {
+    return botSay(`I don't have any scanned bets yet. Go to <b>Find bets</b> and press Scan (main lines are free with TheRundown), then ask me again.`, ['Check a bet']);
+  }
+  if (p.sports && p.sports.length) rows = rows.filter(r => p.sports.includes(r.sport_key));
+  if (p.props) rows = rows.filter(r => r.player);
+  const good = rows.filter(qualifies).sort((a, b) => b.ev - a.ev);
+  const item = (r, i) => `<button type="button" class="cpick" data-i="${i}"><b>${esc(betLabel(r))}</b> ${esc(r.american)}
+    <span class="muted small">${esc(r.event)}, ${when(r.start)} · ${pct(chance(r), 0)} chance · <span class="${r.ev > 0 ? 'up' : 'down'}">${signed(r.ev)}</span> value · ${confidence(r).label}</span></button>`;
+  const list = good.length ? good.slice(0, 5) : rows.slice().sort((a, b) => b.ev - a.ev).slice(0, 3);
+  CHAT.picks = list;
+  const head = good.length
+    ? `<b>Best ${good.length > 5 ? 5 : good.length} of ${good.length} qualifying picks</b> (positive value, medium confidence or better):`
+    : `<b>No qualifying picks right now</b> in ${rows.length ? 'these scans' : 'your scans'}. Closest by value, for reference only:`;
+  botSay(`${head}<div class="cpicks">${list.map(item).join('')}</div><span class="muted small">Tap one for full details. Even good-value bets lose often.</span>`,
+    ['Check a bet', 'How much should I bet?']);
+}
+
+function recordAnswer() {
+  if (!WAGERS.list.length) return 'You haven\'t logged any wagers yet. Add them in <b>My wagers</b> and I can tell you how you\'re doing.';
+  const all = Calc.wagerSummary(WAGERS.list);
+  const d = new Date(); d.setDate(d.getDate() - 29);
+  const recent = Calc.wagerSummary(WAGERS.list.filter(w => w.date >= d.toISOString().slice(0, 10)));
+  const line = (s, name) => s.count ? `<b>${name}:</b> ${s.won}-${s.lost}${s.push ? `-${s.push}` : ''}, <span class="${s.net >= 0 ? 'up' : 'down'}">${signedDollars(s.net)}</span> on ${dollars(s.wagered)} wagered (${signed(s.roi, 1)} return)` : `<b>${name}:</b> no settled bets`;
+  return [line(recent, 'Last 30 days'), line(all, 'All time'),
+    all.streak ? `Current streak: ${all.streak.result === 'won' ? 'won' : 'lost'} ${all.streak.length}.` : '',
+    all.pending ? `${all.pending} pending, ${dollars(all.atStake)} at stake.` : ''].filter(Boolean).join('<br>');
+}
+
+function bankrollAnswer() {
+  if (!bankrollSet()) return 'Your bankroll isn\'t set up yet. Open <b>My wagers → Set up bankroll</b> to get a balance, units and suggested stakes.';
+  const b = WAGERS.bankroll, bal = Calc.balance(b, WAGERS.list), u = unitSize(b);
+  const pending = WAGERS.list.filter(w => w.result === 'pending').reduce((a, w) => a + w.wagered, 0);
+  return `Balance <b>${dollars(bal)}</b> (started at ${dollars(b.start)}, ${bal - b.start >= 0 ? '+' : '−'}${Math.abs((bal - b.start) / u).toFixed(1)} units). ` +
+    `${dollars(pending)} is waiting on pending bets. Suggested stakes use ${KELLY_WORD[b.kelly] || `${b.kelly}× Kelly`}, never more than ${b.cap_pct}% of your balance (${dollars(Math.round(bal * b.cap_pct) / 100)} right now).`;
+}
+
+function picksAnswer() {
+  const open = PICKS.list.filter(p => p.status === 'pending');
+  if (!PICKS.list.length) return 'You haven\'t saved any picks yet. Tap ☆ on a bet in Find bets to save it.';
+  const s = Calc.summarize(PICKS.list);
+  return `${open.length} unsettled pick${open.length === 1 ? '' : 's'}${open.length ? `: ${open.slice(0, 5).map(p => esc(p.label || p.selection)).join(', ')}${open.length > 5 ? '…' : ''}` : ''}.<br>` +
+    (s.wins + s.losses ? `Settled: ${s.wins}-${s.losses}${s.pushes ? `-${s.pushes}` : ''} (${pct(s.winRate, 0)}; the bot expected ${pct(s.expectedRate, 0)}).` : 'None settled yet.');
+}
+
+async function botAnswer() {
+  try {
+    const r = await fetch('/api/track', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'summary', since: botSince(), view: 'side' }) });
+    const s = (await r.json()).summary;
+    const a = s.all, v = s.value, clv = (s.clv || []).find(x => x.bets);
+    const luck = b => b.profit_lo == null ? 'too few to tell' : b.profit_lo > 0 ? 'more than luck' : b.profit_hi < 0 ? 'losing by more than luck' : 'too early to tell';
+    return [`<b>The bot's side of each bet:</b> ${a.wins}-${a.losses} (${a.win_rate != null ? pct(a.win_rate, 0) : '–'}); it expected ${a.expected != null ? pct(a.expected, 0) : '–'}, so its chances are ${a.expected != null && Math.abs(a.win_rate - a.expected) < 0.04 ? 'about right' : 'off so far'}.`,
+      v.bets ? `<b>Good-value bets:</b> ${v.wins}-${v.losses}, <span class="${v.profit >= 0 ? 'up' : 'down'}">${signedDollars(v.profit)}</span> at $100 each: ${luck(v)}.` : 'No good-value bets have finished yet.',
+      clv ? `<b>Beat the closing price:</b> ${pct(clv.beat / clv.bets, 0)} of ${clv.bets} (${signed(clv.avg, 1)} average): ${clv.lo == null ? 'too few to tell' : clv.lo > 0 ? 'a real sign of value' : clv.hi < 0 ? 'losing to the close' : 'too early to tell'}.` : 'Closing-price results are still building up.',
+      `<span class="muted small">Period: ${esc($('#bRange').selectedOptions[0].textContent.toLowerCase())}. Full details in Bot results.</span>`].join('<br>');
+  } catch (e) {
+    return 'I couldn\'t load Bot results just now.';
+  }
+}
+
+// ---- events
+$('#chatFab').onclick = () => openChat(false);
+$('#chatClose').onclick = closeChat;
+$('#chatFull').onclick = () => $('#chatPanel').classList.toggle('full');
+$('#chatForm').addEventListener('submit', e => { e.preventDefault(); chatSend($('#chatInput').value); });
+$('#chatChips').addEventListener('click', e => {
+  const c = e.target.closest('.chip');
+  if (!c) return;
+  if (c.textContent === 'Bankroll') return chatSend('bankroll');
+  chatSend(c.textContent);
+});
+$('#chatLog').addEventListener('click', e => {
+  const b = e.target.closest('.cpick');
+  if (b && CHAT.picks) openBet(CHAT.picks[+b.dataset.i]);
+});
+document.querySelector('.side-item[data-chat]').onclick = () => { closeMenu(); openChat(window.innerWidth > 700); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#chatPanel').hidden && !$('#betModal').open) closeChat(); });
+
+// "Ask about this bet" in a bet's pop-up: open the chat with that bet already checked.
+function askAboutBet(r) {
+  $('#betModal').close();
+  openChat(false);
+  CHAT.last = r;
+  addMsg('me', esc(`Check ${betLabel(r)} ${r.american}`));
+  const bet = { kind: r.player ? 'player' : 'team', sport_key: r.sport_key, event_id: r.event_id, selection: r.selection,
+    market: r.market.replace(/^alternate_/, ''), player: r.player, team: r.pick_team, outcome: r.outcome, point: r.point,
+    event: r.event, start: r.start, home: r.home_team, away: r.away_team };
+  checkAnswer(bet);
+}
