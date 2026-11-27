@@ -80,7 +80,7 @@ function saveChat() {
     Object.keys(CHAT.lists).forEach(id => { if (!used.has(id)) delete CHAT.lists[id]; });
     const html = [...log.querySelectorAll('.cmsg:not(.typing)')].map(m => m.outerHTML.replace(/<div class="aitake pending">.*?<\/div>/g, '')).join('');
     localStorage.setItem(CHAT_KEY, JSON.stringify({
-      html, chips: [...$('#chatChips').querySelectorAll('.chip')].map(c => c.textContent),
+      html, chips: [...$('#chatChips').querySelectorAll('.chip')].map(c => c.dataset.send ? { label: c.textContent, send: c.dataset.send } : c.textContent),
       ctx: CHAT.ctx, last: CHAT.last, lastBet: CHAT.lastBet, list: CHAT.list, lists: CHAT.lists, nextList: CHAT.nextList,
     }));
   } catch (e) { /* storage full or off: the chat still works, it just isn't kept */ }
@@ -100,8 +100,11 @@ function newChat() {
   Object.assign(CHAT, { last: null, lastBet: null, ctx: null, list: null, lists: {}, nextList: 1, lastAsk: null, unknowns: 0, started: false });
   openChat($('#chatPanel').classList.contains('full'));
 }
+// A chip is text to send, or {label, send} when the button shows less than it sends.
 function setChips(list) {
-  $('#chatChips').innerHTML = list.map(c => `<button type="button" class="chip">${esc(c)}</button>`).join('');
+  $('#chatChips').innerHTML = list.map(c => typeof c === 'string'
+    ? `<button type="button" class="chip">${esc(c)}</button>`
+    : `<button type="button" class="chip" data-send="${esc(c.send)}">${esc(c.label)}</button>`).join('');
 }
 
 async function chatSend(text) {
@@ -125,7 +128,8 @@ async function chatSend(text) {
     remember(p);
     // the chatbot answered with its numbers; the AI adds a short take to that reply
     const msgs = document.querySelectorAll('#chatLog .cmsg.bot');
-    if (aiOn() && !NO_AI_TAKE.includes(p.intent) && msgs.length > before) aiAssist(text, msgs[msgs.length - 1]);
+    const asksBack = (p.bets || []).some(b => b.problem || b.kind === 'choose') || (p.intent === 'about' && (p.bets || []).some(b => b.yesno));
+    if (aiOn() && !NO_AI_TAKE.includes(p.intent) && !asksBack && msgs.length > before) aiAssist(text, msgs[msgs.length - 1]);
   } catch (e) {
     wait.remove();
     botSay(`Sorry, something went wrong: ${esc(e.message)}`);
@@ -164,10 +168,14 @@ async function answer(p, text) {
     case 'result': return botSay(resultAnswer(p), ['Who plays tonight?', 'What should I bet on tonight?']);
     case 'winner': return winnerAnswer(p.bets);
     case 'faq': return botSay(FAQ_TEXT[p.topic] || helpText(), ['What should I bet on tonight?', 'Check a bet']);
-    case 'smalltalk': return botSay(SMALLTALK_TEXT[p.topic] || 'Ha. Ask me about a bet whenever you like.', CHIPS_START);
+    case 'smalltalk': {
+      const t = SMALLTALK_TEXT[p.topic];
+      return botSay((typeof t === 'function' ? t() : t) || 'Ha. Ask me about a bet whenever you like.', CHIPS_START);
+    }
     case 'choose': {
       const names = p.bets[0].choices;
-      return botSay(`Which player did you mean?`, names.map(n => `${n.replace(/ \(.*\)$/, '')} ${text}`.slice(0, 120)));
+      return botSay(names.some(n => n.includes('(')) ? 'Which player did you mean?' : 'Which team did you mean?',
+        names.map(n => ({ label: n, send: `${n.replace(/ \(.*\)$/, '')} ${text}`.slice(0, 160) })));
     }
     case 'stake':
       if (p.bets && p.bets[0] && p.bets[0].market) return checkAnswer(p.bets[0], true);
@@ -250,6 +258,7 @@ function renderAiToggle() {
 const aiLeft = n => n != null ? ` · ${n} left today` : '';
 
 async function aiAssist(question, el) {
+  const botAnswer = el.innerText.replace(/\s+/g, ' ').slice(0, 1500);    // before the placeholder below
   const take = document.createElement('div');
   take.className = 'aitake pending';
   take.innerHTML = '<span class="ailabel">✨ AI is adding a take…</span>';
@@ -258,7 +267,7 @@ async function aiAssist(question, el) {
   try {
     const r = await fetch('/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode: 'assist', message: question, facts: aiFacts(question),
-        bot_answer: el.innerText.replace(/\s+/g, ' ').slice(0, 1500), history: chatHistory() }) });
+        bot_answer: botAnswer, history: chatHistory() }) });
     const j = await r.json();
     if (!r.ok || j.error || !j.answer) {
       if (j && /limit/.test(j.error || '')) { take.className = 'aitake'; take.innerHTML = `<span class="ailabel">✨ ${esc(j.error)}</span>`; }
@@ -310,6 +319,9 @@ const SMALLTALK_TEXT = {
   who: 'I\'m the Odd Finder chat: I answer from the bot\'s own numbers (odds, stats, injuries, your records). I\'m not an AI, so I stick to betting questions.',
   laugh: '😄 Anything you want me to check?',
   bye: 'See you! Good luck, and bet responsibly.',
+  ai: () => state.cfg && state.cfg.ai
+    ? `Yes: I'm connected to Google's Gemini (3.5 Flash-Lite). I answer from the bot's own numbers first, and with <b>✨ AI on</b> (top of this chat) Gemini adds a short take; questions I don't understand go to Gemini directly. It's ${aiOn() ? 'on' : 'off'} right now.`
+    : 'No AI is connected right now, so I answer as a chatbot from the bot\'s own numbers. Adding a Gemini key to config.json connects one.',
   morning: 'Hey! Want to see what\'s good tonight?',
   smart: 'I try! I only know what the bot\'s numbers say, so I\'m best at bet questions. Tell me what I got wrong and I\'ll get better at it.',
 };
@@ -323,7 +335,7 @@ function scheduleAnswer(p) {
     const ml = rows.filter(r => r.event_id === g.event_id && r.market === 'h2h');
     if (!ml.length) return '';
     const fav = ml.reduce((a, b) => chance(b) > chance(a) ? b : a);
-    return ` · bot likes <b>${esc(nick(fav.outcome))}</b> ${pct(chance(fav), 0)}`;
+    return ` · bot likes <b>${esc(shortTeam(fav.outcome))}</b> ${pct(chance(fav), 0)}`;
   };
   const byLeague = {};
   games.forEach(g => (byLeague[g.sport] ||= []).push(g));
@@ -338,7 +350,7 @@ function resultAnswer(p) {
     const f = Object.values(b.forms || {}).filter(Boolean);
     if (!f.length) return `I don't have ${esc(b.player)}'s recent games.`;
     const g = f[0].recent[0];
-    return `<b>${esc(b.player)}</b>, last game (${esc(g.date)}, ${g.home ? 'vs' : '@'} ${esc(nick(g.opp))}): ` +
+    return `<b>${esc(b.player)}</b>, last game (${esc(g.date)}, ${g.home ? 'vs' : '@'} ${esc(shortTeam(g.opp))}): ` +
       f.map(x => `${x.recent[0].value} ${esc(x.stat)}`).join(', ') + '.';
   }
   const r = p.result;
@@ -542,6 +554,10 @@ function teamInjuries(bet) {
   return txt ? `Injury report:<br>${txt}` : '';
 }
 
+// A team's short name, unless its nickname is generic ("City", "United", "Town"): then its full name.
+const GENERIC_NICK = ['City', 'United', 'Town', 'Albion', 'FC', 'Athletic', 'Rovers', 'Wanderers', 'County', 'Rangers', 'Sporting'];
+const shortTeam = n => GENERIC_NICK.includes(nick(n)) ? n : nick(n);
+
 function formAnswer(bet, wantAll) {
   const forms = bet && bet.forms;
   if (!forms) return '';
@@ -552,12 +568,12 @@ function formAnswer(bet, wantAll) {
       const ov = blk => f.line != null && blk.over != null ? `, over ${f.line} in ${blk.over} of ${blk.games}` : '';
       return `<b>${esc(bet.player)}, ${esc(f.stat)}:</b> last 5 avg ${f.last5.avg}${ov(f.last5)}; last 10 avg ${f.last10.avg}${ov(f.last10)}; last 20 avg ${f.last20.avg}${ov(f.last20)}.` +
         (f.home_avg != null && f.away_avg != null ? ` Home ${f.home_avg}, away ${f.away_avg}.` : '') +
-        (wantAll ? `<br><span class="muted small">Recent: ${f.recent.map(g => `${g.value} ${g.home ? 'vs' : '@'} ${esc(nick(g.opp))}`).join(', ')}</span>` : '');
+        (wantAll ? `<br><span class="muted small">Recent: ${f.recent.map(g => `${g.value} ${g.home ? 'vs' : '@'} ${esc(shortTeam(g.opp))}`).join(', ')}</span>` : '');
     }).join('<br>');
   }
   return Object.entries(forms).filter(([, f]) => f).map(([team, f]) =>
     `<b>${esc(team)}</b> last ${f.games.length}: ${f.record}, scoring ${f.for} and allowing ${f.against} on average.` +
-    (wantAll ? `<br><span class="muted small">${f.games.map(g => `${g.result} ${g.score} ${g.home ? 'vs' : '@'} ${esc(nick(g.opp))}`).join(', ')}</span>` : '')).join('<br>');
+    (wantAll ? `<br><span class="muted small">${f.games.map(g => `${g.result} ${g.score} ${g.home ? 'vs' : '@'} ${esc(shortTeam(g.opp))}`).join(', ')}</span>` : '')).join('<br>');
 }
 
 function injuryAnswer(bet) {
@@ -834,6 +850,7 @@ $('#chatForm').addEventListener('submit', e => { e.preventDefault(); chatSend($(
 $('#chatChips').addEventListener('click', e => {
   const c = e.target.closest('.chip');
   if (!c) return;
+  if (c.dataset.send) return chatSend(c.dataset.send);
   if (c.textContent === 'Bankroll') return chatSend('bankroll');
   if (c.textContent === 'Best value instead') return chatSend('best value bets');
   chatSend(c.textContent);

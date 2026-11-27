@@ -176,3 +176,15 @@ class ResultMatching(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StrictTeamMatch(unittest.TestCase):
+    def test_generic_nicknames_dont_match_different_teams(self):
+        same = stats.same_team_strict
+        self.assertFalse(same("Manchester City", "Coventry City"))
+        self.assertFalse(same("New York Rangers", "Texas Rangers"))
+        self.assertTrue(same("Manchester City", "Manchester City"))
+        self.assertTrue(same("Lakers", "Los Angeles Lakers"))
+        self.assertTrue(same("LA Clippers", "Los Angeles Clippers"))
+        self.assertTrue(same("Brentford", "Brentford FC"))
+        self.assertTrue(same("St Louis Blues", "St. Louis Blues"))

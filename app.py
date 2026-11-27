@@ -854,8 +854,8 @@ def chat_bet(bet):
         return bet
     team, opp = bet.get("team"), bet.get("opponent")
     game = next((g for g in upcoming_games(sport)
-                 if (stats._same_team(team, g["home_team"]) and (not opp or stats._same_team(opp, g["away_team"])))
-                 or (stats._same_team(team, g["away_team"]) and (not opp or stats._same_team(opp, g["home_team"])))), None)
+                 if (stats.same_team_strict(team, g["home_team"]) and (not opp or stats.same_team_strict(opp, g["away_team"])))
+                 or (stats.same_team_strict(team, g["away_team"]) and (not opp or stats.same_team_strict(opp, g["home_team"])))), None)
     if kind == "player":
         markets = [bet["market"]] if bet.get("market") else list(props_stats.SPORTS.get(sport, {}).get("markets", {}))
         forms = {m: chatbot.player_form(sport, bet["player"], m, bet.get("point") if m == bet.get("market") else None) for m in markets}
@@ -864,7 +864,7 @@ def chat_bet(bet):
         bet["forms"] = {t: chatbot.team_form(sport, t) for t in (team, opp) if t}
     if not game:
         live = next((g for g in upcoming_games(sport, started_hours=5)
-                     if stats._same_team(team, g["home_team"]) or stats._same_team(team, g["away_team"])), None)
+                     if stats.same_team_strict(team, g["home_team"]) or stats.same_team_strict(team, g["away_team"])), None)
         if live and parse_time(live["commence_time"]) <= datetime.now(timezone.utc):
             bet["error"] = (f"{live['away_team']} @ {live['home_team']} has already started. The bot only checks bets "
                             f"before the start, because live odds move too fast.")
@@ -877,14 +877,14 @@ def chat_bet(bet):
     bet.update(event_id=game["id"], home=home, away=away, start=game["commence_time"], event=f"{away} @ {home}",
                sport=game.get("sport_title") or sport_title(sport))
     if kind == "team" and not opp:
-        bet["opponent"] = away if stats._same_team(team, home) else home
+        bet["opponent"] = away if stats.same_team_strict(team, home) else home
     inj = injuries.lookup([{"key": "chat", "sport_key": sport, "player": bet.get("player"), "home": home, "away": away}])
     bet["injury"], bet["injury_teams"], bet["injury_updated"] = inj["injuries"].get("chat"), inj["teams"], inj["updated"]
     market = bet.get("market")
     if not market or bet.get("problem"):
         return bet
     if market in ("h2h", "spreads"):
-        bet["outcome"] = home if stats._same_team(team, home) else away     # the game's own spelling
+        bet["outcome"] = home if stats.same_team_strict(team, home) else away     # the game's own spelling
     selection = describe(market, {"name": bet["outcome"], "point": bet.get("point"), "description": bet.get("player")})
     bet.update(selection=selection, market_label=market_label(market))
     found, pending = stats.predict_many([{"key": "chat", "sport_key": sport, "market": market, "outcome": bet["outcome"],
@@ -927,7 +927,7 @@ def chat_schedule(p):
         for g in upcoming_games(sport):
             t = parse_time(g["commence_time"])
             if scope.get("team"):
-                if not (stats._same_team(scope["team"], g["home_team"]) or stats._same_team(scope["team"], g["away_team"])):
+                if not (stats.same_team_strict(scope["team"], g["home_team"]) or stats.same_team_strict(scope["team"], g["away_team"])):
                     continue
             elif not (start <= t < end):
                 continue
@@ -946,11 +946,11 @@ def chat_result(bet):
     if not lg:
         return None
     team = bet.get("team")
-    games = [g for g in lg.store.games() if stats._same_team(g["home"], team) or stats._same_team(g["away"], team)]
+    games = [g for g in lg.store.games() if stats.same_team_strict(g["home"], team) or stats.same_team_strict(g["away"], team)]
     if not games:
         return None
     g = max(games, key=lambda x: x["date"])
-    home = stats._same_team(g["home"], team)
+    home = stats.same_team_strict(g["home"], team)
     us, them = (g["hs"], g["as"]) if home else (g["as"], g["hs"])
     return {"team": g["home"] if home else g["away"], "opponent": g["away"] if home else g["home"], "home": home,
             "us": us, "them": them, "date": g["date"], "won": us > them, "tie": us == them}

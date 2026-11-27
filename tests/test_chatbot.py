@@ -24,7 +24,7 @@ PLAYERS = {
     "basketball_nba": dict([p("Nikola Jokic", "Denver Nuggets"), p("LeBron James", "Los Angeles Lakers"),
                             p("Jaylen Brown", "Boston Celtics"), p("Bruce Brown", "Denver Nuggets"),
                             p("Jayson Tatum", "Boston Celtics"), p("Stephen Curry", "Golden State Warriors")]),
-    "icehockey_nhl": dict([p("Connor McDavid", "Edmonton Oilers", "icehockey_nhl")]),
+    "icehockey_nhl": dict([p("Connor McDavid", "Edmonton Oilers", "icehockey_nhl"), p("Cam York", "Philadelphia Flyers", "icehockey_nhl")]),
     "americanfootball_nfl": dict([p("Josh Allen", "Buffalo Bills", "americanfootball_nfl")]),
 }
 TEAMS = {
@@ -134,6 +134,17 @@ class Reading(unittest.TestCase):
         intent, out = ask("the weather today")
         self.assertEqual(intent, "unknown")
         self.assertTrue(out["suggestions"])
+
+    def test_city_words_and_ambiguous_team_names(self):
+        out = chatbot.parse("new york ml")                                       # not the player Cam York
+        self.assertEqual((out["intent"], out["bets"][0]["choices"]), ("choose", ["New York Knicks", "New York Rangers"]))
+        self.assertEqual(chatbot.parse("cam york over 0.5 points")["bets"][0]["player"], "Cam York")
+        out = chatbot.parse("manchester ml")
+        self.assertEqual(out["bets"][0]["choices"], ["Manchester City", "Manchester United"])
+        self.assertEqual(chatbot.parse("manchester city ml")["bets"][0]["team"], "Manchester City")
+        self.assertEqual(chatbot.parse("jaquars ml")["intent"], "check") if "Jacksonville Jaguars" in TEAMS.get("americanfootball_nfl", {}) else None
+        self.assertEqual(chatbot.parse("nugets -3.5")["bets"][0]["team"], "Denver Nuggets")      # typo
+        self.assertEqual(chatbot.parse("are u connected to gemini")["topic"], "ai")
 
     def test_shared_last_names(self):
         out = chatbot.parse("brown over 12.5 points")

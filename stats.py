@@ -796,6 +796,29 @@ def _same_team(a, b):
     return a == b or (a and b and a.split()[-1] == b.split()[-1])
 
 
+GENERIC_NICKNAMES = {"city", "united", "town", "fc", "athletic", "county", "rovers", "wanderers", "albion",
+                     "sc", "cf", "club", "real", "sporting", "rangers", "state", "st"}
+
+
+def same_team_strict(a, b):
+    """Like _same_team, but a shared nickname only counts when it's distinctive: "Manchester
+    City" and "Coventry City" are different teams; "Lakers" and "Los Angeles Lakers" aren't."""
+    def clean(n):
+        n = normalize(n or "")
+        n = " ".join(w for w in n.split() if w not in ("fc", "afc", "cf", "sc")) or n
+        return ALIASES.get(n, n)
+    na, nb = clean(a), clean(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    la, lb = na.split()[-1], nb.split()[-1]
+    if la != lb or la in GENERIC_NICKNAMES:
+        return False
+    # nickname alone given ("lakers"), or the same nickname with one city name inside the other
+    return len(na.split()) == 1 or len(nb.split()) == 1 or na.endswith(nb) or nb.endswith(na) or na.split()[0] == nb.split()[0]
+
+
 def find_final_game(sport_key, home, away, start_iso, refresh=False):
     """The finished game matching the odds feed's home and away teams and start time, as
     (game, flipped) where flipped means ESPN lists home and away the other way round;

@@ -177,10 +177,12 @@ def find_teams(text, sports=None):
         for team in ts:
             for a in team_aliases(team, sport):
                 alias.setdefault(a, set()).add((sport, team))
-    # a close spelling of a one-word team name ("jaquars" -> jaguars), if it fits only one team
-    singles = [a for a in alias if " " not in a and len(a) >= 5]
+    # a close spelling of a one-word team name ("jaquars" -> jaguars), if it fits only one
+    # in-season team; words that are already part of a team name ("angeles") are left alone
+    tokens = {t for a in alias for t in a.split()}
+    singles = [a for a in alias if " " not in a and len(a) >= 5 and all(sp in live for sp, _ in alias[a])]
     for w in re.findall(r"[a-z]{5,}", text):
-        if w in alias or w in WORDS_NOT_NAMES:
+        if w in tokens or w in WORDS_NOT_NAMES:
             continue
         m = difflib.get_close_matches(w, singles, n=1, cutoff=0.84)
         if m and len(alias[m[0]]) == 1:
@@ -202,6 +204,24 @@ def find_teams(text, sports=None):
             found.append((sport, team))
         used.append((i, i + len(a) + 1))
     return found
+
+
+def ambiguous_teams(text, sports=None):
+    """Teams a word could mean when it fits several ("manchester": City or United)."""
+    _, teams = _get_index()
+    live = _in_season(teams)
+    alias = {}
+    for sport, ts in teams.items():
+        if (sports and sport not in sports) or sport not in live:
+            continue
+        for team in ts:
+            for a in team_aliases(team, sport):
+                alias.setdefault(a, set()).add(team)
+    words = re.findall(r"[a-z]+", text)
+    for w in [" ".join(words[i:i + 2]) for i in range(len(words) - 1)] + words:
+        if w in alias and len(alias[w]) > 1 and w not in WORDS_NOT_NAMES:
+            return sorted(alias[w])[:6]
+    return []
 
 
 def find_player(text, sports=None, prefer_teams=()):
@@ -246,8 +266,9 @@ def find_player(text, sports=None, prefer_teams=()):
     by_last = {}
     for k, ps in pool.items():
         by_last.setdefault(k.split()[-1], []).extend(ps)
+    team_words = {w for sp, ts in teams.items() if sp in live for t in ts for w in stats.normalize(t).split()}
     for w in words:
-        if len(w) < 3:
+        if len(w) < 3 or w in team_words:
             continue
         hits = by_last.get(w)
         if not hits and len(w) >= 5:
@@ -321,6 +342,9 @@ def read_bet(text, sports=None, prefer_teams=()):
     if not teams:
         if player:
             return dict(bet, kind="player", player=player["name"], team=player["team"], sport_key=player["sport"])
+        amb = ambiguous_teams(rest, sports)
+        if amb:
+            return dict(bet, kind="choose", choices=amb)
         if side:
             return dict(bet, kind="unclear", problem=f"Which game or player is {side.lower()} {line:g} for? "
                         "For example \"Celtics Knicks over 224.5\" or \"Tatum over 27.5 points\".")
@@ -438,6 +462,7 @@ SMALLTALK = [
     ("laugh", r"^(lol|lmao|haha+|hehe|bruh|damn|wow|omg|nice one|crazy|sheesh|bet)\b"),
     ("bye", r"^(bye|goodbye|see (you|ya)|later|gn|good ?night|night)\b"),
     ("morning", r"^(good )?(morning|afternoon|evening)\b"),
+    ("ai", r"\b(gemini|chatgpt|gpt|an ai|the ai|ai model|connected to)\b"),
     ("smart", r"\b(you'?re|ur|you are) (dumb|stupid|useless|bad|trash|smart|great|good|the best|amazing)\b|\b(dumb|stupid) (bot|chat)\b"),
 ]
 FAQ = [
@@ -663,14 +688,14 @@ def team_form(sport, team):
     lg = stats._leagues.get(sport)
     if not lg:
         return None
-    games = [g for g in lg.store.games() if stats._same_team(g["home"], team) or stats._same_team(g["away"], team)]
+    games = [g for g in lg.store.games() if stats.same_team_strict(g["home"], team) or stats.same_team_strict(g["away"], team)]
     games = sorted(games, key=lambda g: g["date"], reverse=True)[:10]
     if not games:
         return None
     rows, w, l, d = [], 0, 0, 0
     pf = pa = 0.0
     for g in games:
-        home = stats._same_team(g["home"], team)
+        home = stats.same_team_strict(g["home"], team)
         us, them = (g["hs"], g["as"]) if home else (g["as"], g["hs"])
         res = "W" if us > them else "L" if us < them else "D"
         w, l, d = w + (res == "W"), l + (res == "L"), d + (res == "D")

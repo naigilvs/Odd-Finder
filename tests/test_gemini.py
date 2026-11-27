@@ -16,7 +16,15 @@ def reply(text, thought=None):
 
 
 class Ask(unittest.TestCase):
+    def tearDown(self):
+        self.usage.stop()
+        self.tmp.cleanup()
+
     def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.usage = mock.patch.object(gemini, "USAGE_FILE", Path(self.tmp.name) / "ai_usage.json")
+        self.usage.start()
         gemini._calls.clear()
         gemini._model["name"] = None
         gemini._resting.clear()
@@ -108,13 +116,21 @@ class Endpoint(unittest.TestCase):
         self.assertIn("The bot's answer (already shown to the user): Not really", ask.call_args[0][2])
         self.assertTrue(ask.call_args[1]["assist"])
 
-    def test_remaining_counts_down(self):
-        gemini._calls.clear()
-        self.assertEqual(gemini.remaining(now=100), gemini.PER_DAY)
-        gemini.ask("k", "q", "f", post=lambda *a: reply("x"), now=100)
-        self.assertEqual(gemini.remaining(now=100), gemini.PER_DAY - 1)
-        self.assertEqual(gemini.remaining(now=100 + 86401), gemini.PER_DAY)       # a day later
-        gemini._calls.clear()
+    def test_remaining_counts_down_survives_restarts_and_resets_at_midnight_pacific(self):
+        import tempfile
+        from datetime import datetime
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(gemini, "USAGE_FILE", Path(d) / "u.json"):
+            gemini._calls.clear()
+            gemini._resting.clear()
+            noon = datetime(2026, 11, 27, 12, 0, tzinfo=gemini.PACIFIC).timestamp()
+            self.assertEqual(gemini.remaining(now=noon), gemini.PER_DAY)
+            gemini.ask("k", "q", "f", post=lambda *a: reply("x"), now=noon)
+            self.assertEqual(gemini.remaining(now=noon), gemini.PER_DAY - 1)
+            gemini._calls[:] = gemini._load_usage()                                  # as after a restart
+            self.assertEqual(gemini.remaining(now=noon + 60), gemini.PER_DAY - 1)
+            just_after_midnight = datetime(2026, 11, 28, 0, 1, tzinfo=gemini.PACIFIC).timestamp()
+            self.assertEqual(gemini.remaining(now=just_after_midnight), gemini.PER_DAY)   # Google's reset
+            gemini._calls.clear()
 
 
 if __name__ == "__main__":

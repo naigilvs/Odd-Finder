@@ -14,6 +14,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import stats
 
 BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # Free-key limits per model (AI Studio, Nov 2026): 3.5 Flash-Lite 15 a minute / 50 a day,
@@ -50,15 +54,42 @@ def remaining(now=None):
     """AI answers left today under the bot's own cap."""
     now = now or time.time()
     with _lock:
-        return max(PER_DAY - len([t for t in _calls if now - t < 86400]), 0)
+        return max(PER_DAY - len([t for t in _calls if t >= _day_start(now)]), 0)
 
 
 class GeminiError(Exception):
     pass
 
 
+USAGE_FILE = stats.DATA_DIR / "ai_usage.json"   # when AI questions were asked, so restarts don't reset the count
+PACIFIC = ZoneInfo("America/Los_Angeles")       # Google resets free daily limits at midnight Pacific time
+
 _lock = threading.Lock()
 _calls = []                            # times of recent calls, for the limits above
+
+
+def _load_usage():
+    try:
+        return [float(t) for t in json.loads(USAGE_FILE.read_text()) if isinstance(t, (int, float))]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def _save_usage():
+    try:
+        USAGE_FILE.parent.mkdir(exist_ok=True)
+        USAGE_FILE.write_text(json.dumps(_calls[-500:]))
+    except OSError:
+        pass
+
+
+def _day_start(now):
+    """Unix time of the last midnight Pacific before `now`."""
+    d = datetime.fromtimestamp(now, PACIFIC).replace(hour=0, minute=0, second=0, microsecond=0)
+    return d.timestamp()
+
+
+_calls.extend(_load_usage())
 _model = {"name": None}
 _resting = {}                          # model -> time it may be tried again
 
@@ -68,9 +99,10 @@ def _allowed(now):
         _calls[:] = [t for t in _calls if now - t < 86400]
         if len([t for t in _calls if now - t < 60]) >= PER_MINUTE:
             raise GeminiError("The AI is getting a lot of questions; try again in a minute.")
-        if len(_calls) >= PER_DAY:
-            raise GeminiError("The AI has answered its daily limit of questions; it resets tomorrow.")
+        if len([t for t in _calls if t >= _day_start(now)]) >= PER_DAY:
+            raise GeminiError("The AI has answered its daily limit of questions; it resets at midnight Pacific time.")
         _calls.append(now)
+        _save_usage()
 
 
 def _post(key, model, body, timeout):
@@ -85,7 +117,6 @@ def ask(key, question, facts, history=(), model=None, post=_post, now=None, assi
     lines `history` ([(who, text)], who = "user" or "bot"). Raises GeminiError."""
     if not key:
         raise GeminiError("No Gemini key set.")
-    _allowed(now or time.time())
     contents = []
     for who, text in list(history)[-6:]:
         contents.append({"role": "user" if who == "user" else "model", "parts": [{"text": str(text)[:600]}]})
@@ -94,9 +125,10 @@ def ask(key, question, facts, history=(), model=None, post=_post, now=None, assi
             "generationConfig": {"temperature": 0.4, "maxOutputTokens": 700}}
     t = now or time.time()
     order = [model] if model else ([_model["name"]] if _model["name"] else []) + [m for m in MODELS if m != _model["name"]]
-    tried = [m for m in order if _resting.get(m, 0) <= t] or order[:0]
+    tried = [m for m in order if _resting.get(m, 0) <= t]
     if not tried:
         raise GeminiError("The AI's free limit is used up for now; it resets later (Google resets daily limits at midnight Pacific time).")
+    _allowed(t)                                         # counts toward the bot's cap only when a model is asked
     last = None
     for m in tried:
         try:
