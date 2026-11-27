@@ -62,7 +62,7 @@ class Basics(unittest.TestCase):
 
     def test_more_bets_groups_per_league(self):
         nba = {g["key"] for g in app.more_groups("basketball_nba")}
-        self.assertEqual(nba, {"alt", "team", "periods", "props", "yesno"})
+        self.assertEqual(nba, {"alt", "team", "periods", "props", "yesno", "milestones"})
         soccer = {g["key"] for g in app.more_groups("soccer_epl")}
         self.assertEqual(soccer, {"alt", "team"})
 

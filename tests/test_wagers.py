@@ -139,7 +139,7 @@ class WagerLog(unittest.TestCase):
         self.assertNotIn("decimal", single)
 
     def test_bankroll_settings_saved_next_to_wagers(self):
-        self.assertEqual(self.store.bankroll, wagers.BANKROLL_DEFAULTS)            # not set up yet
+        self.assertEqual(self.store.bankroll, dict(wagers.BANKROLL_DEFAULTS, moves=[]))            # not set up yet
         saved = self.store.set_bankroll({"start": "500", "unit_pct": 1, "kelly": 0.25, "cap_pct": 2, "max_stake": 25})
         self.assertEqual(saved["start"], 500.0)
         self.assertEqual(saved["daily_loss"], 0.0)                                  # missing -> default (off)
@@ -155,7 +155,23 @@ class WagerLog(unittest.TestCase):
             with self.assertRaises(ValueError) as e:
                 self.store.set_bankroll(data)
             self.assertIn(words, str(e.exception))
-        self.assertEqual(self.store.bankroll, wagers.BANKROLL_DEFAULTS)            # unchanged
+        self.assertEqual(self.store.bankroll, dict(wagers.BANKROLL_DEFAULTS, moves=[]))            # unchanged
+
+    def test_add_and_withdraw_money(self):
+        self.store.set_bankroll({"start": 500})
+        self.store.add_money({"kind": "deposit", "amount": 100, "date": "2026-11-20", "note": "payday"})
+        w = self.store.add_money({"kind": "withdraw", "amount": "40", "date": "2026-11-22"})
+        self.assertEqual([m["amount"] for m in self.store.bankroll["moves"]], [100.0, -40.0])
+        self.store.set_bankroll({"start": 500, "max_stake": 25})                     # settings keep the money moves
+        again = wagers.WagerStore(self.store.path)
+        self.assertEqual(len(again.bankroll["moves"]), 2)
+        again.delete_money(w["id"])
+        self.assertEqual([m["amount"] for m in wagers.WagerStore(self.store.path).bankroll["moves"]], [100.0])
+        for bad, words in [({"kind": "deposit", "amount": 0}, "how much"), ({"kind": "gift", "amount": 5}, "add money or withdraw"),
+                           ({"kind": "withdraw", "amount": 5, "date": "nope"}, "date"), ("x", "missing")]:
+            with self.assertRaises(ValueError) as e:
+                self.store.add_money(bad)
+            self.assertIn(words, str(e.exception))
 
 
 if __name__ == "__main__":

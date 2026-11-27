@@ -92,6 +92,18 @@
     }, 0);
   }
 
+  // ---- search: every word typed must appear in the bet (player, team, bet type, line), accents and
+  // case ignored, and "pts"/"reb"/"ast"/"ml" understood. "lebron points 24.5" finds LeBron Over 24.5 points.
+  const SEARCH_WORDS = { pts: 'points', pt: 'points', reb: 'rebounds', rebs: 'rebounds', ast: 'assists', asts: 'assists',
+    ml: 'moneyline', threes: '3-pointers', '3s': '3-pointers', sog: 'shots', o: 'over', u: 'under', yds: 'yards' };
+  const plain = t => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  function matchesSearch(r, query) {
+    const words = plain(query).split(/\s+/).filter(Boolean).map(w => SEARCH_WORDS[w] || w);
+    if (!words.length) return true;
+    const hay = plain([betLabel(r), r.selection, r.event, r.market_label, r.sport, r.player, r.pick_team, r.home_team, r.away_team].join(' '));
+    return words.every(w => hay.includes(w));
+  }
+
   // ---- one side per bet
   // Every side and line of one bet share a key: LeBron Over and Under 24.5 (and 26.5),
   // Knicks -4.5 and Celtics +4.5, all three outcomes of a soccer moneyline.
@@ -224,13 +236,16 @@
 
   // ---- bankroll
   // Balance: the starting bankroll plus the net of every settled wager.
+  // Money added (+) or withdrawn (-) since the start.
+  const moved = settings => (settings.moves || []).reduce((a, m) => a + m.amount, 0);
   function balance(settings, list) {
-    return Math.round((settings.start + list.reduce((a, w) => a + wagerNet(w), 0)) * 100) / 100;
+    return Math.round((settings.start + moved(settings) + list.reduce((a, w) => a + wagerNet(w), 0)) * 100) / 100;
   }
-  // Balance after each day with settled wagers, oldest first.
+  // Balance after each day with settled wagers or money added/withdrawn, oldest first.
   function balanceHistory(settings, list) {
     const byDay = new Map();
     for (const w of list) if (w.result !== 'pending') byDay.set(w.date, (byDay.get(w.date) || 0) + wagerNet(w));
+    for (const m of settings.moves || []) byDay.set(m.date, (byDay.get(m.date) || 0) + m.amount);
     let b = settings.start;
     return [...byDay.keys()].sort().map(date => {
       b += byDay.get(date);
@@ -275,7 +290,7 @@
 
   const api = { MARKET_WEIGHT, chance, agrees, confidence, CONF_RANK, betLabel, americanOdds, lineGroup, bestLines, betGroup, pickSides,
                 pickProfit, summarize, winFromOdds, parlayDecimal, parlayResult, wagerNet, wagerSummary,
-                balance, balanceHistory, kellyStake, bankrollWarnings, freePoints };
+                balance, balanceHistory, kellyStake, bankrollWarnings, freePoints, moved, matchesSearch };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Calc = api;
 })(this);

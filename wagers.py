@@ -128,6 +128,35 @@ def clean_bankroll(data):
     return out
 
 
+def clean_money(data):
+    """One deposit or withdrawal from the page: {date, kind: "deposit"/"withdraw", amount, note}."""
+    if not isinstance(data, dict):
+        raise ValueError("That deposit or withdrawal is missing details.")
+    if data.get("kind") not in ("deposit", "withdraw"):
+        raise ValueError("Choose add money or withdraw.")
+    amount = _money(data.get("amount"), "amount")
+    if amount <= 0:
+        raise ValueError("Enter how much money.")
+    try:
+        day = date.fromisoformat(str(data.get("date") or date.today().isoformat()))
+    except ValueError:
+        raise ValueError("Enter a valid date.")
+    return {"date": day.isoformat(), "kind": data["kind"], "amount": amount if data["kind"] == "deposit" else -amount,
+            "note": str(data.get("note") or "").strip()[:80]}
+
+
+def _clean_moves(items):
+    out = []
+    for m in items if isinstance(items, list) else []:
+        try:
+            c = clean_money({"kind": m.get("kind"), "amount": abs(float(m.get("amount", 0))), "date": m.get("date"), "note": m.get("note")})
+            c.update(id=str(m.get("id") or uuid.uuid4().hex[:12])[:20], created=str(m.get("created") or "")[:40])
+            out.append(c)
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return out
+
+
 def net(w):
     return w["won"] if w["result"] == "won" else -w["wagered"] if w["result"] == "lost" else 0.0
 
@@ -139,9 +168,11 @@ class WagerStore:
         # bankroll settings sit next to the wagers: bankroll.json (bankroll_demo.json in demo mode)
         self.bankroll_path = path.parent / path.name.replace("wagers", "bankroll")
         try:
-            self.bankroll = clean_bankroll(json.loads(self.bankroll_path.read_text()))
-        except (OSError, ValueError):
-            self.bankroll = dict(BANKROLL_DEFAULTS)
+            raw = json.loads(self.bankroll_path.read_text())
+            self.bankroll = clean_bankroll(raw)
+            self.bankroll["moves"] = _clean_moves(raw.get("moves"))       # money added or withdrawn
+        except (OSError, ValueError, AttributeError):
+            self.bankroll = dict(BANKROLL_DEFAULTS, moves=[])
         try:
             self.wagers = json.loads(self.path.read_text())
             if not isinstance(self.wagers, list):
@@ -200,14 +231,34 @@ class WagerStore:
             self._write()
             return old
 
+    def _write_bankroll(self):
+        tmp = self.bankroll_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.bankroll, indent=1))
+        tmp.replace(self.bankroll_path)
+
     def set_bankroll(self, data):
         settings = clean_bankroll(data)
         with self.lock:
+            settings["moves"] = self.bankroll.get("moves", [])           # settings don't touch deposits
             self.bankroll = settings
-            tmp = self.bankroll_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(settings, indent=1))
-            tmp.replace(self.bankroll_path)
+            self._write_bankroll()
         return settings
+
+    def add_money(self, data):
+        """Add money to the bankroll, or withdraw some."""
+        move = clean_money(data)
+        move.update(id=uuid.uuid4().hex[:12], created=datetime.now(timezone.utc).isoformat())
+        with self.lock:
+            self.bankroll.setdefault("moves", []).append(move)
+            self._write_bankroll()
+        return move
+
+    def delete_money(self, mid):
+        with self.lock:
+            before = len(self.bankroll.get("moves", []))
+            self.bankroll["moves"] = [m for m in self.bankroll.get("moves", []) if m["id"] != mid]
+            if len(self.bankroll["moves"]) != before:
+                self._write_bankroll()
 
     def delete(self, wid):
         with self.lock:

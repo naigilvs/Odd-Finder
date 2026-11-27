@@ -99,6 +99,20 @@ YES_NO_MARKETS = {
 ONE_SIDED_MARGIN = 0.10
 
 
+# Player props with milestone lines ("15+ points"), loaded as "<market>_alternate" and kept as
+# "alternate_<market>" so they group with the main line like alternate spreads do.
+MILESTONE_MARKETS = {
+    "basketball_nba": ["player_points", "player_rebounds", "player_assists", "player_threes"],
+    "icehockey_nhl": ["player_points", "player_shots_on_goal"],
+    "americanfootball_nfl": ["player_pass_yds", "player_rush_yds", "player_reception_yds", "player_receptions"],
+}
+
+
+def milestone_key(key):
+    """'player_points_alternate' -> 'alternate_player_points'; other keys unchanged."""
+    return "alternate_" + key[:-len("_alternate")] if key.endswith("_alternate") else key
+
+
 def more_groups(sport):
     """Bet-type groups the More bets section can load for a league."""
     family = sport.split("_")[0]
@@ -113,6 +127,8 @@ def more_groups(sport):
          "markets": PROP_MARKETS.get(sport, [])},
         {"key": "yesno", "label": "Yes/no player props", "hint": "Anytime touchdown, double-double, home run…",
          "markets": YES_NO_MARKETS.get(sport, [])},
+        {"key": "milestones", "label": "Milestone player lines (15+, 20+…)", "hint": "The same props at other numbers, like LeBron 15+ points",
+         "markets": [m + "_alternate" for m in MILESTONE_MARKETS.get(sport, [])]},
     ]
     return [g for g in groups if g["markets"]]
 
@@ -146,6 +162,7 @@ def market_label(key):
 
 
 def is_player_market(key):
+    key = key[len("alternate_"):] if key.startswith("alternate_") else key
     return key.startswith(("player_", "batter_", "pitcher_"))
 CACHE_SECONDS = 300
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")   # league keys and game ids from the browser
@@ -350,8 +367,12 @@ def run_more_scan(target, sport, event_ids, markets):
     rows, errors = [], []
 
     def fetch(eid, mkts):
-        return api_get(f"/sports/{sport}/events/{eid}/odds", bookmakers=books_param(target),
-                       markets=",".join(mkts), oddsFormat="decimal")
+        ev = api_get(f"/sports/{sport}/events/{eid}/odds", bookmakers=books_param(target),
+                     markets=",".join(mkts), oddsFormat="decimal")
+        for b in ev.get("bookmakers", []):                # milestone lines group with their main line
+            for m in b.get("markets", []):
+                m["key"] = milestone_key(m["key"])
+        return ev
 
     def one(eid):
         if DEMO:
@@ -1430,6 +1451,10 @@ class Handler(BaseHTTPRequestHandler):
                 WAGERS.delete(str(body.get("id")))
             elif action == "bankroll":
                 WAGERS.set_bankroll(body.get("bankroll"))
+            elif action == "money_add":
+                WAGERS.add_money(body.get("move"))
+            elif action == "money_delete":
+                WAGERS.delete_money(str(body.get("id")))
             elif action != "list":
                 return self.send_json({"error": "Unknown action"}, 400)
             if action != "list":

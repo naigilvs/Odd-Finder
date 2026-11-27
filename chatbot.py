@@ -90,7 +90,8 @@ def norm(text):
     t = stats.unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
     t = text.replace("−", "-").replace("–", "-") if not t else t
     t = re.sub(r"[−–—]", "-", t)
-    t = re.sub(r"[^a-z0-9+\-.'/ ]", " ", t)
+    t = re.sub(r"[,;&]", " , ", t)                     # list separators stay (parlay legs), as " , "
+    t = re.sub(r"[^a-z0-9+\-.'/, ]", " ", t)
     return " ".join(t.split())
 
 
@@ -316,8 +317,39 @@ def american_to_decimal(a):
     return round(1 + a / 100, 4) if a > 0 else round(1 + 100 / -a, 4)
 
 
+def milestones(text):
+    """"15+ points", "15 or more points", "at least 15 points" -> "over 14.5 points"."""
+    text = re.sub(r"\b(?:at least |atleast )?(\d{1,3})(?:\s*\+|\s+or more|\s+plus)(?=\s|$|\W)",
+                  lambda m: f"over {int(m.group(1)) - 0.5:g}", text)
+    return re.sub(r"\bat least (\d{1,3})\b", lambda m: f"over {int(m.group(1)) - 0.5:g}", text)
+
+
+def read_legs(text, sports=None):
+    """The legs of a parlay written in one message ("Okongwu over 5.5 rebounds, Nuggets ML and
+    Giannis over 25 pts"): (bets, pieces that couldn't be read). A team on its own is its moneyline."""
+    body = milestones(text)
+    body = re.sub(r"^.*?\bparlays?\b(?:\s+(?:with|of|on|for|like))?[:\s]*", "", body) if "parlay" in body else body
+    parts = [x.strip(" .?!") for x in re.split(r"\s*(?:,|;|\band\b|&|\+(?!\d)|\bplus\b|\bwith\b|\balso\b)\s*", body)]
+    ends = (r"\b(points|point|pts|rebounds|rebs|boards|assists|asts|threes|3s|3pm|shots|sog|yards|yds|receptions|catches|"
+            r"ml|moneyline|win)\s+(?=[a-z])")
+    parts = [y.strip() for x in parts for y in re.sub(ends, r"\1 , ", x).split(",")]
+    legs, unread = [], []
+    for part in parts:
+        if not part or part in WORDS_NOT_NAMES or len(part) < 3:
+            continue
+        b = read_bet(part, sports)
+        if b.get("market") and not b.get("problem"):
+            legs.append(b)
+        elif b.get("kind") == "team" and not b.get("problem"):
+            legs.append(dict(b, market="h2h", outcome=b["team"]))
+        else:
+            unread.append(part)
+    return legs, unread
+
+
 def read_bet(text, sports=None, prefer_teams=()):
     """One bet from a piece of text, or {"problem": ...} when it can't be understood."""
+    text = milestones(text)
     odds = read_odds(text)
     rest = ODDS.sub(" ", text)
     m = SIDE_LINE.search(rest)
@@ -571,6 +603,11 @@ def parse(message, context=None):
             first = follow_up("that", ctx)
             if second.get("market"):
                 return dict(out, intent="compare", bets=[first, second])
+    # a parlay: several bets in one message
+    if "parlay" in text or len(re.findall(r",|;|\band\b|&|\+(?!\d)", text)) >= 2:
+        legs, unread = read_legs(text, out["sports"] or None)
+        if len(legs) >= 2 and ("parlay" in text or len(legs) >= 3):
+            return dict(out, intent="parlay", bets=legs[:12], unread=unread[:6])
     # bets in the text (two joined by "or" / "vs" with lines: compare them)
     parts = [p for p in re.split(r"\s+(?:or|vs\.?|versus)\s+", text) if p.strip()]
     if len(parts) == 2 and all(SIDE_LINE.search(p) or SPREAD.search(p) or ODDS.search(p) or re.search(r"\bml\b", p) for p in parts):

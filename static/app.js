@@ -285,7 +285,9 @@ function showCredits(q, rd) {
 function filtered() {
   const m = $('#fMarket').value, minP = +$('#fProb').value / 100, minEv = +$('#fEv').value / 100;
   const minBooks = +$('#minBooks').value || 1, key = $('#sort').value;
-  return pickSides(rowsInTab())
+  const q = $('#fSearch').value.trim();
+  // searching for a specific bet shows both sides of it; otherwise one side per bet
+  return (q ? rowsInTab().filter(r => Calc.matchesSearch(r, q)) : pickSides(rowsInTab()))
     .filter(r => (!$('#fBoth').checked || r.agree_sides) && (!m || r.market_label === m) && chance(r) >= minP && r.ev >= minEv && r.books_used.length >= minBooks
       && (!$('#fAgree').checked || agrees(r))
       && (!$('#fConf').value || CONF_RANK[confidence(r).level] >= CONF_RANK[$('#fConf').value]))
@@ -336,8 +338,11 @@ function renderResults(fresh) {
   $('#shown').textContent = list.length ? `Showing ${Math.min(list.length, 300)} of ${list.length}` : '';
   // Say when filters hide bets (e.g. player props offered by only 1-2 other books), with a way to show them.
   $('#sideTabs').hidden = !all.length;
+  $('#searchBar').hidden = !all.length;
+  const q = $('#fSearch').value.trim();
+  $('#searchNote').textContent = q ? `${list.length} bet${list.length === 1 ? '' : 's'} match "${q}"${list.length ? ', both sides shown' : ': try fewer words, or another tab'}` : '';
   const picked = pickSides(all);                    // one side per bet, before the filters
-  const hiddenByFilters = picked.length - list.length;
+  const hiddenByFilters = q ? 0 : picked.length - list.length;      // a search isn't "hidden by filters"
   const note = $('#filterNote');
   note.hidden = !hiddenByFilters;
   if (hiddenByFilters) {
@@ -679,6 +684,7 @@ $('#home').onclick = e => { e.preventDefault(); showPage('find'); state.tab = 'a
 ['#fMarket', '#fProb', '#fEv', '#sort', '#minBooks'].forEach(s => $(s).addEventListener('input', () => renderResults()));
 $('#fAgree').addEventListener('change', () => renderResults());
 $('#fBoth').addEventListener('change', () => renderResults());
+$('#fSearch').addEventListener('input', () => renderResults());
 document.querySelectorAll('.sidetabs').forEach(t => t.addEventListener('click', e => {
   const b = e.target.closest('button[data-side]');
   if (b) setSideTab(b.dataset.side);
@@ -1752,22 +1758,51 @@ function renderBankroll() {
       <button class="btn-scan" type="button" data-br="open">Set up bankroll</button></div>`;
     return;
   }
-  const bal = Calc.balance(b, WAGERS.list), unit = unitSize(b), net = bal - b.start;
+  const moved = Calc.moved(b), bal = Calc.balance(b, WAGERS.list), unit = unitSize(b), net = bal - b.start - moved;   // profit excludes deposits
   const tone = net > 0 ? 'up' : net < 0 ? 'down' : '';
   const limits = [b.max_stake > 0 && `max stake ${dollars(b.max_stake)}`, b.daily_loss > 0 && `daily loss limit ${dollars(b.daily_loss)}`,
     b.exposure_pct > 0 && `pending bets up to ${b.exposure_pct}% of bankroll`].filter(Boolean);
   box.innerHTML = `
     <div class="br-top">
       <div class="br-nums">
-        <div><b>${dollars(bal)}</b>balance (started at ${dollars(b.start)})</div>
+        <div><b>${dollars(bal)}</b>balance (started at ${dollars(b.start)}${moved ? `, ${moved > 0 ? '+' : '−'}${dollars(Math.abs(moved))} ${moved > 0 ? 'added' : 'withdrawn'} since` : ''})</div>
         <div><b class="${tone}">${net >= 0 ? '+' : '−'}${Math.abs(net / unit).toFixed(1)}u</b>profit in units (1 unit = ${dollars(Math.round(unit * 100) / 100)}, ${b.unit_pct}% of your start)</div>
       </div>
-      <button class="linkbtn" type="button" data-br="open">Bankroll settings</button>
+      <div class="br-actions">
+        <button class="linkbtn" type="button" data-money="deposit">+ Add money</button>
+        <button class="linkbtn" type="button" data-money="withdraw">− Withdraw</button>
+        <button class="linkbtn" type="button" data-br="open">Bankroll settings</button>
+      </div>
     </div>
+    ${WAGERS.moneyForm ? moneyForm(WAGERS.moneyForm) : ''}
+    ${moneyList(b)}
     <p class="muted small br-rule">Suggested stakes: ${KELLY_WORD[b.kelly] || `${b.kelly}× Kelly`}, never more than ${b.cap_pct}% of your balance.
       ${limits.length ? `Warnings: ${limits.join(', ')}.` : 'No limits set.'}</p>
     ${balanceChart(b)}`;
 }
+
+// Add money / Withdraw: a small form, and the list of past ones (with Delete)
+function moneyForm(kind) {
+  return `<form class="money-form" id="moneyForm" novalidate>
+    <b>${kind === 'deposit' ? 'Add money to your bankroll' : 'Withdraw from your bankroll'}</b>
+    <label>Amount <span class="br-in">$<input type="number" min="0" step="0.01" id="moneyAmount" placeholder="0"></span></label>
+    <label>Date <input type="date" id="moneyDate" value="${todayLocal()}"></label>
+    <label>Note <input id="moneyNote" maxlength="80" placeholder="optional"></label>
+    <span><button type="button" class="linkbtn" data-money="cancel">Cancel</button>
+      <button class="btn-scan small" type="submit">${kind === 'deposit' ? 'Add' : 'Withdraw'}</button></span>
+  </form>`;
+}
+function moneyList(b) {
+  const moves = (b.moves || []).slice().sort((x, y) => (y.date + y.created).localeCompare(x.date + x.created));
+  if (!moves.length) return '';
+  return `<details class="money-list"${WAGERS.moneyOpen ? ' open' : ''}><summary>Money added and withdrawn (${moves.length})</summary>
+    ${moves.map(m => `<div class="money-row"><span>${fmtDate(m.date)}</span>
+      <b class="${m.amount > 0 ? 'up' : 'down'}">${m.amount > 0 ? '+' : '−'}${dollars(Math.abs(m.amount))}</b>
+      <span class="muted">${esc(m.note || (m.amount > 0 ? 'Added' : 'Withdrawn'))}</span>
+      <button type="button" class="linkbtn remove" data-money-del="${esc(m.id)}">Delete</button></div>`).join('')}
+  </details>`;
+}
+const fmtDate = d => new Date(d + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 
 function bankrollForm(b) {
   const num = (key, label, step, hint, prefix = '', suffix = '') => `<label>${label}
@@ -1825,7 +1860,7 @@ function balanceChart(b) {
         data-pts='${esc(JSON.stringify(all.map((p, i) => [x(i), y(p.balance), p.date ? fmtDay(p.date) : 'Start', dollars(p.balance)])))}'/>
     </svg>
     <div class="br-tip" hidden></div>
-    <figcaption class="muted small">Balance after each day with a settled wager. The dashed line is your starting bankroll.</figcaption>
+    <figcaption class="muted small">Balance after each day with a settled wager or money added or withdrawn. The dashed line is your starting bankroll.</figcaption>
   </figure>`;
 }
 
@@ -1853,7 +1888,21 @@ $('#bankroll').addEventListener('mouseleave', () => {
   document.querySelectorAll('#bankroll .br-tip').forEach(el => el.hidden = true);
   document.querySelectorAll('#bankroll .cross, #bankroll .dot').forEach(el => el.style.display = 'none');
 });
-$('#bankroll').addEventListener('click', e => {
+$('#bankroll').addEventListener('click', async e => {
+  const mv = e.target.closest('[data-money]');
+  if (mv) {
+    WAGERS.moneyForm = mv.dataset.money === 'cancel' ? null : mv.dataset.money;
+    renderBankroll();
+    if (WAGERS.moneyForm) $('#moneyAmount').focus();
+    return;
+  }
+  const del = e.target.closest('[data-money-del]');
+  if (del) {
+    if (!confirm('Delete this deposit or withdrawal? Your balance will change back.')) return;
+    try { await wagersApi({ action: 'money_delete', id: del.dataset.moneyDel }); WAGERS.moneyOpen = true; setWagerStatus('Deleted.'); }
+    catch (err) { setWagerStatus(err.message, true); }
+    return renderWagers();
+  }
   const btn = e.target.closest('[data-br]');
   if (!btn) return;
   WAGERS.settingsOpen = btn.dataset.br === 'open';
@@ -1862,6 +1911,17 @@ $('#bankroll').addEventListener('click', e => {
 });
 $('#bankroll').addEventListener('submit', async e => {
   e.preventDefault();
+  if (e.target.id === 'moneyForm') {
+    const kind = WAGERS.moneyForm, amount = +$('#moneyAmount').value;
+    if (!(amount > 0)) return setWagerStatus('Enter how much money.', true);
+    try {
+      await wagersApi({ action: 'money_add', move: { kind, amount, date: $('#moneyDate').value, note: $('#moneyNote').value } });
+      WAGERS.moneyForm = null;
+      setWagerStatus(kind === 'deposit' ? `Added ${dollars(amount)} to your bankroll.` : `Withdrew ${dollars(amount)} from your bankroll.`);
+      renderWagers();
+    } catch (err) { setWagerStatus(err.message, true); }
+    return;
+  }
   const settings = {};
   e.target.querySelectorAll('[data-key]').forEach(el => settings[el.dataset.key] = el.value === '' ? 0 : +el.value);
   try {

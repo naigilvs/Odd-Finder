@@ -584,3 +584,20 @@
   .cpick .solid { color: var(--turf); font-weight: 700; }
   .cbet .plain { margin: 6px 0 8px; font-size: 14px; line-height: 1.5; }
   .cpick .plain { color: var(--chalk); margin-top: 3px; line-height: 1.4; }
+  .legs-check { padding-left: 0; list-style: none; margin: 6px 0; }
+  .legs-check li { margin: 6px 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+  .legs-check li span { display: block; margin-top: 2px; }
+  .legs-check li span span, .legs-check .inj { display: inline; }
+  .br-actions { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .money-form { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin: 12px 0 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+  .money-form > b { flex-basis: 100%; color: var(--chalk); }
+  .money-form label { display: flex; flex-direction: column; gap: 4px; color: var(--slate); }
+  .money-form input { background: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; color: var(--chalk); font: inherit; }
+  .money-list { margin-top: 10px; font-size: 13px; color: var(--slate); }
+  .money-list summary { cursor: pointer; }
+  .money-row { display: grid; grid-template-columns: 110px 90px 1fr auto; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line); }
+  .money-row b.up { color: var(--turf); } .money-row b.down { color: #ff6b6f; }
+  .searchbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 10px; }
+  .searchbar[hidden] { display: none; }
+  .searchbar input { flex: 1 1 320px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; color: var(--chalk); font: 15px var(--body); }
+  .searchbar input:focus { border-color: var(--amber); outline: none; }

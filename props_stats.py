@@ -406,7 +406,7 @@ class LiveProps:
 
     def predict(self, item):
         self.refresh_if_stale()
-        stat = self.cfg["markets"].get(item.get("market"))
+        stat = self.cfg["markets"].get((item.get("market") or "").replace("alternate_", "", 1))
         if not stat:
             return None
         label = self.cfg["labels"][stat]
@@ -452,7 +452,8 @@ LEAGUE_NAMES = {"basketball_nba": "NBA", "icehockey_nhl": "NHL", "americanfootba
 
 def handles(item):
     sport = item.get("sport_key")
-    return sport in SPORTS and item.get("market") in SPORTS[sport]["markets"]
+    market = (item.get("market") or "").replace("alternate_", "", 1)
+    return sport in SPORTS and market in SPORTS[sport]["markets"]
 
 
 def find_player_stat(sport, market, player, home, away, start_iso, refresh=False):

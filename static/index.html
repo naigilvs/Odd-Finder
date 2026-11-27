@@ -93,6 +93,10 @@
         <button type="button" role="tab" data-side="value" aria-selected="true">Best value<small>The better deal at FanDuel's price</small></button>
         <button type="button" role="tab" data-side="likely" aria-selected="false">Most likely to win<small>The side the bot thinks will win</small></button>
       </div>
+      <div class="searchbar" id="searchBar" hidden>
+        <input id="fSearch" type="search" autocomplete="off" placeholder="Search bets: a player, team or bet, e.g. LeBron points, Knicks, over 224.5" aria-label="Search bets">
+        <span class="muted small" id="searchNote"></span>
+      </div>
       <div class="filters" id="filters" hidden>
         <label>Bet type<select id="fMarket"></select></label>
         <label>Min. chance of success %<input id="fProb" type="number" min="0" max="100" value="0"></label>

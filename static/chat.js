@@ -184,6 +184,7 @@ async function answer(p, text) {
         : botSay('Which bet? Check one first, like <i>Knicks −4.5 −110</i>, then ask how much to bet.');
     case 'check': return checkAnswer(p.bets[0]);
     case 'compare': return compareAnswer(p.bets);
+    case 'parlay': return parlayAnswer(p);
     case 'injury': return botSay(injuryAnswer(p.bets[0]), ['Best bets tonight']);
     case 'form': {
       const b = p.bets[0];
@@ -560,6 +561,11 @@ function checkAnswer(bet, stakeToo) {
   const fair = americanOdds(1 / ch);
   const odds = row.decimal ? `${row.american}${row.user_odds ? ' (your odds)' : ` (${esc(state.book ? state.book.name : 'FanDuel')})`}` : '–';
   const extra = [];
+  if (bet.player && !findScanned(bet)) {        // a prop line that isn't scanned: show FanDuel's main line for it
+    const main = scannedRows().find(r => r.player && nameKey(r.player) === nameKey(bet.player)
+      && r.market.replace(/^alternate_/, '') === bet.market && r.outcome === bet.outcome);
+    if (main) extra.push(`FanDuel's main line is <b>${esc(betLabel(main))} ${esc(main.american)}</b>. ${bet.point != null ? `${esc(String(bet.point + 0.5))}+ is a milestone line: ` : ''}load <b>Milestone player lines</b> for this game in More bets to get its FanDuel price.`);
+  }
   if (bet.fd_line && !findScanned(bet)) extra.push(`FanDuel's current line is <b>${esc(bet.fd_line.selection)} ${esc(bet.fd_line.american)}</b>; you asked about a different number.`);
   const f = formAnswer(bet);
   if (f) extra.push(f);
@@ -614,6 +620,63 @@ async function saveAnswer() {
   } catch (e) {
     botSay(`I couldn't save it: ${esc(e.message)}`);
   }
+}
+
+// ---- a parlay: every leg checked, then the whole thing
+function parlayAnswer(p) {
+  const legs = (p.bets || []).map(b => {
+    if (b.error || b.problem) return { b, row: null, why: b.error || b.problem };
+    const { row } = chatRow(b);
+    return { b, row, why: row ? null : (b.stats && b.stats.reason) || 'no market price or stats for this one' };
+  });
+  const ok = legs.filter(l => l.row);
+  const name = l => esc(l.row ? betLabel(l.row) : (l.b.selection || [l.b.player || l.b.team, l.b.market && l.b.market.replace(/_/g, ' '), l.b.point].filter(Boolean).join(' ')));
+  const lines = legs.map((l, i) => {
+    if (!l.row) return `<li><b>${i + 1}. ${name(l)}</b> <span class="muted small">— can't judge: ${esc(String(l.why).toLowerCase())}</span></li>`;
+    const r = l.row, ch = chance(r);
+    const inj = (injOf(r) || {}).player;
+    const price = r.decimal ? `${esc(r.american)}${r.user_odds ? ' (your odds)' : ''}` : 'odds unknown';
+    return `<li><b>${i + 1}. ${name(l)}</b> ${price}${inj ? ` <span class="inj ${inj.level}">⚠ ${esc(inj.status)}</span>` : ''}
+      <span class="plain small">${esc(plainSummary(r, true))}</span>
+      <span class="muted small">${pct(ch, 0)} chance${r.ev != null ? ` · <span class="${r.ev > 0 ? 'up' : 'down'}">${signed(r.ev)}</span> value` : ''} · ${r.stats_only ? 'stats only' : confidence(r).label + ' confidence'}</span></li>`;
+  });
+  const parts = [`<b>Your ${legs.length}-leg parlay</b><ol class="legs-check">${lines.join('')}</ol>`];
+  if (ok.length < 2) {
+    parts.push('I could only judge one leg or none of them, so I can\'t rate the whole parlay. Check the legs I couldn\'t judge, or give their odds.');
+    return botSay(parts.join(''), ['Check a bet']);
+  }
+  // the whole parlay: chances multiply, so do the odds (pushed legs aside)
+  const comb = ok.reduce((a, l) => a * chance(l.row), 1);
+  const allPriced = ok.every(l => l.row.decimal > 1) && ok.length === legs.length;
+  const dec = allPriced ? ok.reduce((a, l) => a * l.row.decimal, 1) : null;
+  const value = dec ? comb * dec - 1 : null;
+  const games = {}; ok.forEach(l => { games[l.row.event_id] = (games[l.row.event_id] || 0) + 1; });
+  const sameGame = Object.values(games).some(n => n > 1);
+  const out = ok.find(l => ((injOf(l.row) || {}).player || {}).level === 'out');
+  const weakest = ok.slice().sort((a, b) => (a.row.ev ?? -1) - (b.row.ev ?? -1) || chance(a.row) - chance(b.row))[0];
+  const oneIn = Math.max(1, Math.round(1 / comb));
+  const yn = out ? ['bad', 'No', `${(injOf(out.row) || {}).player.name} is listed out`]
+    : value == null ? ['ok', 'Can\'t say yet', 'I need every leg\'s odds to rate the price']
+    : value > 0.03 ? ['good', 'Yes', 'the parlay pays more than its chances are worth']
+    : value > 0 ? ['ok', 'Lean yes', 'a small edge, but parlays are risky']
+    : value > -0.08 ? ['ok', 'Not really', 'no real edge: every leg adds the sportsbook\'s cut']
+    : ['bad', 'No', 'the payout is too low for how unlikely it is'];
+  parts.push(`<div class="cyes ${yn[0]}"><b>${esc(yn[1])}</b> — ${esc(yn[2])}.</div>`);
+  parts.push(`<p class="plain">All ${legs.length} legs have to hit. The bot gives the whole parlay about a <b>1-in-${oneIn}</b> chance (${pct(comb, 0)})` +
+    (dec ? `; at about <b>${Calc.americanOdds(dec)}</b> (the legs' odds multiplied) ${value > 0 ? 'that pays a bit more than it\'s worth' : 'that pays less than it\'s worth'}.` : '.') +
+    (weakest && (weakest.row.ev ?? 0) < 0 ? ` The weakest leg is <b>${esc(betLabel(weakest.row))}</b>${weakest.row.ev != null ? ` (${signed(weakest.row.ev)} value)` : ''}: dropping it would help.` : '') + '</p>');
+  const notes = [];
+  if (sameGame) notes.push('Some legs are from the same game, so they aren\'t independent: the real chance can be higher or lower than shown, and FanDuel prices same-game parlays differently.');
+  if (!allPriced) notes.push(`Missing odds for ${legs.filter(l => !l.row || !(l.row.decimal > 1)).map(name).join(', ')}: add them (like "-110") or scan those games, and I'll rate the price.`);
+  if (ok.some(l => l.row.stats_only)) notes.push('Legs marked "stats only" have no market price, so they\'re rough.');
+  if (dec && bankrollSet()) {
+    const k = Calc.kellyStake(comb, dec, Calc.balance(WAGERS.bankroll, WAGERS.list), WAGERS.bankroll, 'low');
+    notes.push(k.stake ? `Suggested stake: ${dollars(k.stake)} (kept small: parlays swing a lot).` : 'Suggested stake: $0, there\'s no edge.');
+  }
+  if ((p.unread || []).length) notes.push(`I couldn't read: ${p.unread.map(u => `"${esc(u)}"`).join(', ')}.`);
+  if (notes.length) parts.push(`<ul class="risk">${notes.map(n => `<li>${n}</li>`).join('')}</ul>`);
+  CHAT.last = null;
+  return botSay(parts.join(''), ['Check a bet', 'Best bets tonight']);
 }
 
 function stakeLine(row) {

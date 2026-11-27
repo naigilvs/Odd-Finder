@@ -214,3 +214,25 @@ test('free odds points estimate', () => {
   assert.equal(Calc.freePoints(['soccer_epl'], {}), 10 * 20);
   assert.equal(Calc.freePoints([], {}), 0);
 });
+
+test('bankroll: money added and withdrawn', () => {
+  const S = { start: 500, unit_pct: 1, kelly: 0.25, cap_pct: 2, max_stake: 0, daily_loss: 0, exposure_pct: 10,
+              moves: [{ date: '2026-11-21', amount: 100 }, { date: '2026-11-23', amount: -40 }] };
+  const list = [{ date: '2026-11-22', result: 'won', wagered: 20, won: 18 }];
+  assert.equal(Calc.moved(S), 60);
+  assert.equal(Calc.balance(S, list), 578);
+  assert.deepEqual(Calc.balanceHistory(S, list).map(p => p.balance), [600, 618, 578]);
+});
+
+test('search finds bets by any words in them', () => {
+  const r = bet({ player: 'LeBron James', selection: 'LeBron James Over 24.5 points', labeled: true, market: 'player_points',
+                  market_label: 'Player points', event: 'Philadelphia 76ers @ Indiana Pacers', sport: 'NBA' });
+  assert.equal(Calc.matchesSearch(r, 'lebron points'), true);
+  assert.equal(Calc.matchesSearch(r, 'LEBRON pts 24.5'), true);           // case, "pts"
+  assert.equal(Calc.matchesSearch(r, 'lebron o24'), false);               // "o24" isn't a word in it
+  assert.equal(Calc.matchesSearch(r, 'lebron over'), true);
+  assert.equal(Calc.matchesSearch(r, 'pacers'), true);                    // the game
+  assert.equal(Calc.matchesSearch(r, 'lebron rebounds'), false);
+  assert.equal(Calc.matchesSearch(r, ''), true);
+  assert.equal(Calc.matchesSearch(bet({ selection: 'Dončić Over 30.5', event: 'x' }), 'doncic'), true);   // accents
+});
