@@ -93,11 +93,28 @@ class Endpoint(unittest.TestCase):
                 mock.patch.object(app, "ai_facts", wraps=lambda m, f: "\n".join(f)):
             out = app.ai_answer({"message": "is this good?", "facts": ["Bet being discussed: Knicks -4.5"],
                                  "history": [{"who": "user", "text": "hi"}, "junk"]})
-        self.assertEqual(out, {"answer": "Not really."})
+        self.assertEqual(out["answer"], "Not really.")
+        self.assertIn("left", out)
         self.assertIn("Knicks -4.5", ask.call_args[0][2])
         self.assertEqual(ask.call_args[0][3], [("user", "hi")])
         with mock.patch.object(app, "GEMINI_KEY", None):
             self.assertIn("error", app.ai_answer({"message": "x"}))
+
+    def test_assist_mode_adds_the_bots_answer_and_short_take_rules(self):
+        with mock.patch.object(app, "GEMINI_KEY", "k"), \
+                mock.patch.object(app.gemini, "ask", return_value="Fair price, no edge.") as ask, \
+                mock.patch.object(app, "ai_facts", wraps=lambda m, f: "facts"):
+            app.ai_answer({"mode": "assist", "message": "knicks -4.5", "bot_answer": "Not really — no edge at this price."})
+        self.assertIn("The bot's answer (already shown to the user): Not really", ask.call_args[0][2])
+        self.assertTrue(ask.call_args[1]["assist"])
+
+    def test_remaining_counts_down(self):
+        gemini._calls.clear()
+        self.assertEqual(gemini.remaining(now=100), gemini.PER_DAY)
+        gemini.ask("k", "q", "f", post=lambda *a: reply("x"), now=100)
+        self.assertEqual(gemini.remaining(now=100), gemini.PER_DAY - 1)
+        self.assertEqual(gemini.remaining(now=100 + 86401), gemini.PER_DAY)       # a day later
+        gemini._calls.clear()
 
 
 if __name__ == "__main__":

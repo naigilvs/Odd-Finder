@@ -38,6 +38,21 @@ Rules:
 Plain text only: no markdown headings or tables; short paragraphs or a few "-" bullet lines are fine."""
 
 
+# Assist mode: the chatbot has already answered with exact numbers; the AI adds a short take.
+ASSIST = """
+ASSIST MODE: the bot has already shown the user its own answer, with the exact numbers (it's in the facts as
+"The bot's answer"). Write a short follow-up of 1-3 sentences (under 60 words): the takeaway in plain, natural
+words, or one useful extra point. Agree with the bot's verdict and numbers; never contradict them or invent new
+ones. Don't repeat every number, don't start with "Yes"/"No" (the bot already did), and don't greet the user."""
+
+
+def remaining(now=None):
+    """AI answers left today under the bot's own cap."""
+    now = now or time.time()
+    with _lock:
+        return max(PER_DAY - len([t for t in _calls if now - t < 86400]), 0)
+
+
 class GeminiError(Exception):
     pass
 
@@ -65,7 +80,7 @@ def _post(key, model, body, timeout):
         return json.loads(r.read())
 
 
-def ask(key, question, facts, history=(), model=None, post=_post, now=None):
+def ask(key, question, facts, history=(), model=None, post=_post, now=None, assist=False):
     """The AI's answer to `question`, given the bot's `facts` (text) and the last few chat
     lines `history` ([(who, text)], who = "user" or "bot"). Raises GeminiError."""
     if not key:
@@ -75,7 +90,7 @@ def ask(key, question, facts, history=(), model=None, post=_post, now=None):
     for who, text in list(history)[-6:]:
         contents.append({"role": "user" if who == "user" else "model", "parts": [{"text": str(text)[:600]}]})
     contents.append({"role": "user", "parts": [{"text": f"FACTS (from the bot, as of now):\n{facts[:6000]}\n\nQUESTION: {question[:500]}"}]})
-    body = {"systemInstruction": {"parts": [{"text": SYSTEM}]}, "contents": contents,
+    body = {"systemInstruction": {"parts": [{"text": SYSTEM + (ASSIST if assist else "")}]}, "contents": contents,
             "generationConfig": {"temperature": 0.4, "maxOutputTokens": 700}}
     t = now or time.time()
     order = [model] if model else ([_model["name"]] if _model["name"] else []) + [m for m in MODELS if m != _model["name"]]

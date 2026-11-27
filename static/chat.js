@@ -39,6 +39,7 @@ const CHIPS_AFTER_BET = ['Why?', 'How much should I bet?', 'What about the other
 
 // ---- the panel
 function openChat(full) {
+  renderAiToggle();
   $('#chatPanel').hidden = false;
   $('#chatPanel').classList.toggle('full', !!full);
   $('#chatFab').hidden = true;
@@ -77,7 +78,7 @@ function saveChat() {
     while (log.querySelectorAll('.cmsg:not(.typing)').length > CHAT_MAX_MESSAGES) log.querySelector('.cmsg:not(.typing)').remove();
     const used = new Set([...log.querySelectorAll('.cpick')].map(b => b.dataset.l));
     Object.keys(CHAT.lists).forEach(id => { if (!used.has(id)) delete CHAT.lists[id]; });
-    const html = [...log.querySelectorAll('.cmsg:not(.typing)')].map(m => m.outerHTML).join('');
+    const html = [...log.querySelectorAll('.cmsg:not(.typing)')].map(m => m.outerHTML.replace(/<div class="aitake pending">.*?<\/div>/g, '')).join('');
     localStorage.setItem(CHAT_KEY, JSON.stringify({
       html, chips: [...$('#chatChips').querySelectorAll('.chip')].map(c => c.textContent),
       ctx: CHAT.ctx, last: CHAT.last, lastBet: CHAT.lastBet, list: CHAT.list, lists: CHAT.lists, nextList: CHAT.nextList,
@@ -119,8 +120,12 @@ async function chatSend(text) {
     const p = await r.json();
     wait.remove();
     if (!r.ok || p.error) throw new Error(p.error || r.statusText);
+    const before = document.querySelectorAll('#chatLog .cmsg.bot').length;
     await answer(p, text);
     remember(p);
+    // the chatbot answered with its numbers; the AI adds a short take to that reply
+    const msgs = document.querySelectorAll('#chatLog .cmsg.bot');
+    if (aiOn() && !NO_AI_TAKE.includes(p.intent) && msgs.length > before) aiAssist(text, msgs[msgs.length - 1]);
   } catch (e) {
     wait.remove();
     botSay(`Sorry, something went wrong: ${esc(e.message)}`);
@@ -232,6 +237,41 @@ function chatHistory() {
     .map(m => ({ who: m.classList.contains('me') ? 'user' : 'bot', text: m.innerText.replace(/\s+/g, ' ').slice(0, 400) }));
 }
 
+// ---- AI takes on every reply (Gemini), with an on/off switch in the chat header
+const NO_AI_TAKE = ['unknown', 'help', 'thanks', 'checkhelp', 'more', 'save', 'choose', 'smalltalk', 'talk', 'term', 'faq'];
+const aiOn = () => !!(state.cfg && state.cfg.ai) && localStorage.getItem('oddfinder.chatAi') !== '0';
+function renderAiToggle() {
+  const b = $('#chatAi');
+  b.hidden = !(state.cfg && state.cfg.ai);
+  b.textContent = aiOn() ? '✨ AI on' : 'AI off';
+  b.setAttribute('aria-pressed', String(aiOn()));
+  b.title = aiOn() ? 'AI takes on replies (Gemini). Click to turn off and save your daily AI answers.' : 'Click to add AI takes to replies (Gemini).';
+}
+const aiLeft = n => n != null ? ` · ${n} left today` : '';
+
+async function aiAssist(question, el) {
+  const take = document.createElement('div');
+  take.className = 'aitake pending';
+  take.innerHTML = '<span class="ailabel">✨ AI is adding a take…</span>';
+  el.appendChild(take);
+  $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
+  try {
+    const r = await fetch('/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'assist', message: question, facts: aiFacts(question),
+        bot_answer: el.innerText.replace(/\s+/g, ' ').slice(0, 1500), history: chatHistory() }) });
+    const j = await r.json();
+    if (!r.ok || j.error || !j.answer) {
+      if (j && /limit/.test(j.error || '')) { take.className = 'aitake'; take.innerHTML = `<span class="ailabel">✨ ${esc(j.error)}</span>`; }
+      else take.remove();
+    } else {
+      take.className = 'aitake';
+      take.innerHTML = `<span class="ailabel">✨ AI take (Gemini) · can be wrong${aiLeft(j.left)}</span>${esc(j.answer).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>')}`;
+    }
+  } catch (e) { take.remove(); }
+  $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
+  saveChat();
+}
+
 async function aiAnswer(text) {
   const wait = addMsg('bot typing', 'Thinking…');
   try {
@@ -244,7 +284,7 @@ async function aiAnswer(text) {
       return null;
     }
     const html = esc(j.answer).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
-    return botSay(`<span class="ailabel">✨ AI answer (Gemini) · can be wrong; the numbers come from the bot</span>${html}`, CHIPS_START);
+    return botSay(`<span class="ailabel">✨ AI answer (Gemini) · can be wrong; the numbers come from the bot${aiLeft(j.left)}</span>${html}`, CHIPS_START);
   } catch (e) {
     wait.remove();
     return null;
@@ -785,6 +825,7 @@ async function botAnswer() {
 
 // ---- events
 restoreChat();
+$('#chatAi').onclick = () => { localStorage.setItem('oddfinder.chatAi', aiOn() ? '0' : '1'); renderAiToggle(); };
 $('#chatFab').onclick = () => openChat(false);
 $('#chatNew').onclick = newChat;
 $('#chatClose').onclick = closeChat;

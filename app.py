@@ -1013,11 +1013,15 @@ def ai_answer(body):
         return {"error": "No AI is connected."}
     message = str(body.get("message") or "")[:500]
     history = [(h.get("who"), h.get("text")) for h in body.get("history") or [] if isinstance(h, dict)][-6:]
+    assist = body.get("mode") == "assist"                   # the chatbot answered; the AI adds a short take
     try:
         facts = ai_facts(message, body.get("facts"))
-        return {"answer": gemini.ask(GEMINI_KEY, message, facts, history)}
+        if assist:
+            facts += "\nThe bot's answer (already shown to the user): " + str(body.get("bot_answer") or "")[:1500]
+        answer = gemini.ask(GEMINI_KEY, message, facts, history, assist=assist)
+        return {"answer": answer, "left": gemini.remaining()}
     except gemini.GeminiError as e:
-        return {"error": str(e)}
+        return {"error": str(e), "left": gemini.remaining()}
 
 
 def chat_answer(message, context=None):
