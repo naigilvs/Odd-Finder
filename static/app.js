@@ -1277,12 +1277,12 @@ function renderBot(s) {
   const luck = b => b.profit_lo == null ? '' : b.profit_lo > 0 ? '. Looks like more than luck'
     : b.profit_hi < 0 ? '. Losing by more than luck'
     : `. Too early to tell: likely range ${signedDollars(Math.round(b.profit_lo))} to ${signedDollars(Math.round(b.profit_hi))}`;
-  const what = { likely: 'of the likelier sides', side: "of the bot's sides", value: 'good-value bets', all: 'sides' }[s.view];
+  const what = { likely: "of the bot's favorites", side: "of the bot's picks", value: 'value bets', all: 'sides' }[s.view];
   $('#bViewNote').innerHTML = {
-    likely: "Counting only <b>the side the bot thinks is most likely to win</b> in each bet (the higher chance of success; one pick per bet, even if the line moved). The other side is logged too, but left out here.",
-    side: "Counting only <b>the bot's side</b> of each bet: the side with the better value, the one ranked higher in Find bets. It can be the less likely side at a good price, so judge it by profit more than win rate.",
-    value: 'Counting only <b>good-value bets</b>: the ones whose price beat their chance of winning when the bot last saw them.',
-    all: "Counting <b>every side logged</b>, both Over and Under, both teams. One side of each bet always wins, so the win rate here sits near 50% by design.",
+    likely: "<b>Bot's favorite:</b> for each bet, only the side the bot gives the higher chance of winning (one pick per bet, even if the line moved). Shows how often the bot picks the winner.",
+    side: "<b>Bot's pick:</b> for each bet, only the side with the better value, the one ranked higher in Find bets. It can be the less likely side at a good price, so judge it by profit more than win rate.",
+    value: "<b>Value bets only:</b> bets whose price was better than their chance of winning when the bot last saw them, the ones it would actually recommend. The real test of whether it makes money.",
+    all: "<b>Both sides of every bet:</b> Over and Under, both teams. One side always wins, so the win rate sits near 50% by design; useful only for checking the bot's chances add up.",
   }[s.view];
   $('#bSummary').innerHTML = s.tracked ? [
     card(s.tracked, '', `${what} tracked, ${s.pending} waiting for a result`),

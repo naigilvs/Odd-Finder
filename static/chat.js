@@ -406,7 +406,7 @@ async function botAnswer() {
     const s = (await r.json()).summary;
     const a = s.all, v = s.value, clv = (s.clv || []).find(x => x.bets);
     const luck = b => b.profit_lo == null ? 'too few to tell' : b.profit_lo > 0 ? 'more than luck' : b.profit_hi < 0 ? 'losing by more than luck' : 'too early to tell';
-    return [`<b>The bot's side of each bet:</b> ${a.wins}-${a.losses} (${a.win_rate != null ? pct(a.win_rate, 0) : '–'}); it expected ${a.expected != null ? pct(a.expected, 0) : '–'}, so its chances are ${a.expected != null && Math.abs(a.win_rate - a.expected) < 0.04 ? 'about right' : 'off so far'}.`,
+    return [`<b>Bot's picks (better-value side):</b> ${a.wins}-${a.losses} (${a.win_rate != null ? pct(a.win_rate, 0) : '–'}); it expected ${a.expected != null ? pct(a.expected, 0) : '–'}, so its chances are ${a.expected != null && Math.abs(a.win_rate - a.expected) < 0.04 ? 'about right' : 'off so far'}.`,
       v.bets ? `<b>Good-value bets:</b> ${v.wins}-${v.losses}, <span class="${v.profit >= 0 ? 'up' : 'down'}">${signedDollars(v.profit)}</span> at $100 each: ${luck(v)}.` : 'No good-value bets have finished yet.',
       clv ? `<b>Beat the closing price:</b> ${pct(clv.beat / clv.bets, 0)} of ${clv.bets} (${signed(clv.avg, 1)} average): ${clv.lo == null ? 'too few to tell' : clv.lo > 0 ? 'a real sign of value' : clv.hi < 0 ? 'losing to the close' : 'too early to tell'}.` : 'Closing-price results are still building up.',
       `<span class="muted small">Period: ${esc($('#bRange').selectedOptions[0].textContent.toLowerCase())}. Full details in Bot results.</span>`].join('<br>');

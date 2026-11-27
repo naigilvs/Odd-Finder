@@ -444,8 +444,8 @@ def side_check(bets):
     groups = {}
     for b in bets:
         groups.setdefault(side_key(b), []).append(b)
-    judges = [("The bot's side (best value)", lambda b: b.get("ev", 0)),
-              ("Higher chance of success", lambda b: b.get("chance", b.get("fair_prob", 0))),
+    judges = [("Bot's pick (better value)", lambda b: b.get("ev", 0)),
+              ("Bot's favorite (higher chance of success)", lambda b: b.get("chance", b.get("fair_prob", 0))),
               ("Market's side (higher fair chance)", lambda b: b.get("fair_prob", 0)),
               ("Stats' side", lambda b: b.get("stats_prob")),
               ("Sportsbook favorite", lambda b: b.get("book_prob", 0))]
@@ -500,9 +500,9 @@ def track_summary(bets, since=None, view="side"):
     return {
         "view": view if view in ("likely", "side", "value") else "all", "side_check": check,
         "clv": [b for b in (_clv_block([b for b in sel if first_value(b) > 0], "Good value when first seen"),
-                            _clv_block(sel, {"likely": "The side most likely to win", "side": "The better-value side",
-                                             "value": "Good-value bets",
-                                             "all": "Every side logged"}.get(view, "Every side logged")))],
+                            _clv_block(sel, {"likely": "Bot's favorites", "side": "Bot's picks",
+                                             "value": "Value bets",
+                                             "all": "Both sides of every bet"}.get(view, "Both sides of every bet")))],
         "tracked": len(sel), "pending": len(sel) - len(done), "settled": len(done),
         "all": _block(done),
         "value": _block([b for b in done if b.get("ev", 0) > 0]),

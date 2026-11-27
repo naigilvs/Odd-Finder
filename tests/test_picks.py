@@ -375,7 +375,7 @@ class BotSide(unittest.TestCase):
 
     def test_which_side_won(self):
         check = {r["name"]: r for r in picks.side_check([b for b in self.bets() if b["status"] != "pending"])}
-        bot = check["The bot's side (best value)"]
+        bot = check["Bot's pick (better value)"]
         self.assertEqual((bot["bets"], bot["right"]), (3, 2))                          # total lost, spread and prop won
         self.assertAlmostEqual(bot["profit"], 2 * 91 - 100)
         market = check["Market's side (higher fair chance)"]
