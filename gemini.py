@@ -16,11 +16,13 @@ import urllib.error
 import urllib.request
 
 BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-# Fast models first (tested: 3.1 Flash-Lite answers in ~3 s on a free key; the full Flash
-# models took over 40 s). The first that answers is remembered.
-MODELS = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"]
+# Free-key limits per model (AI Studio, Nov 2026): 3.5 Flash-Lite 15 a minute / 50 a day,
+# 3.1 Flash-Lite 15 / 5, 3.8 Flash 5 / 20 but over 40 s per answer (too slow for chat).
+# 3.5 Flash-Lite first (~5 s an answer); when a model runs out, the next one is tried.
+MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
 TIMEOUT = 25
-PER_MINUTE, PER_DAY = 10, 300          # stay well inside the free limits
+PER_MINUTE, PER_DAY = 10, 55           # the bot's own cap, just inside the models' daily total
+REST_AFTER_LIMIT = 30 * 60             # a model that says "limit reached" is skipped this long
 
 SYSTEM = """You are the AI helper inside Odd Finder, a personal sports-betting analysis tool for FanDuel.
 Answer the user's question in plain, friendly language, in at most about 120 words.
@@ -43,6 +45,7 @@ class GeminiError(Exception):
 _lock = threading.Lock()
 _calls = []                            # times of recent calls, for the limits above
 _model = {"name": None}
+_resting = {}                          # model -> time it may be tried again
 
 
 def _allowed(now):
@@ -74,14 +77,20 @@ def ask(key, question, facts, history=(), model=None, post=_post, now=None):
     contents.append({"role": "user", "parts": [{"text": f"FACTS (from the bot, as of now):\n{facts[:6000]}\n\nQUESTION: {question[:500]}"}]})
     body = {"systemInstruction": {"parts": [{"text": SYSTEM}]}, "contents": contents,
             "generationConfig": {"temperature": 0.4, "maxOutputTokens": 700}}
-    tried = [model] if model else ([_model["name"]] if _model["name"] else []) + [m for m in MODELS if m != _model["name"]]
+    t = now or time.time()
+    order = [model] if model else ([_model["name"]] if _model["name"] else []) + [m for m in MODELS if m != _model["name"]]
+    tried = [m for m in order if _resting.get(m, 0) <= t] or order[:0]
+    if not tried:
+        raise GeminiError("The AI's free limit is used up for now; it resets later (Google resets daily limits at midnight Pacific time).")
     last = None
     for m in tried:
         try:
             out = post(key, m, body, TIMEOUT)
         except urllib.error.HTTPError as e:
-            if e.code == 429:
-                raise GeminiError("The AI's free daily limit is used up for now; it resets later.")
+            if e.code == 429:                          # this model's limit: rest it, try the next one
+                _resting[m] = t + REST_AFTER_LIMIT
+                last = "limit reached"
+                continue
             if e.code in (401, 403):
                 raise GeminiError("Google didn't accept the Gemini key in config.json.")
             last = f"HTTP {e.code}"
@@ -95,4 +104,6 @@ def ask(key, question, facts, history=(), model=None, post=_post, now=None):
             _model["name"] = m
             return text
         last = "an empty answer"
+    if last == "limit reached":
+        raise GeminiError("The AI's free limit is used up for now; it resets later (Google resets daily limits at midnight Pacific time).")
     raise GeminiError(f"The AI didn't answer ({last}).")

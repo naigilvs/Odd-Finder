@@ -19,6 +19,7 @@ class Ask(unittest.TestCase):
     def setUp(self):
         gemini._calls.clear()
         gemini._model["name"] = None
+        gemini._resting.clear()
 
     def test_sends_facts_question_and_history(self):
         seen = {}
@@ -48,14 +49,32 @@ class Ask(unittest.TestCase):
         gemini.ask("k", "q", "f", post=post)
         self.assertEqual(calls[-1], gemini.MODELS[1])                       # starts with the one that worked
 
+    def test_a_model_at_its_limit_hands_over_to_the_next(self):
+        calls = []
+
+        def post(key, model, body, timeout):
+            calls.append(model)
+            if model == gemini.MODELS[0]:
+                raise urllib.error.HTTPError("u", 429, "limit", {}, None)
+            return reply("ok")
+        self.assertEqual(gemini.ask("k", "q", "f", post=post, now=5000), "ok")
+        self.assertEqual(gemini.ask("k", "q", "f", post=post, now=5100), "ok")
+        self.assertEqual(calls, [gemini.MODELS[0], gemini.MODELS[1], gemini.MODELS[1]])   # resting one skipped
+        gemini.ask("k", "q", "f", post=post, now=5000 + gemini.REST_AFTER_LIMIT + 1)
+        self.assertEqual(calls[-2:], [gemini.MODELS[1]] * 1 + calls[-1:])
+
     def test_errors_and_limits(self):
         def limited(*a):
             raise urllib.error.HTTPError("u", 429, "limit", {}, None)
 
         def bad_key(*a):
             raise urllib.error.HTTPError("u", 403, "no", {}, None)
-        with self.assertRaisesRegex(gemini.GeminiError, "limit"):
-            gemini.ask("k", "q", "f", post=limited)
+        with self.assertRaisesRegex(gemini.GeminiError, "limit is used up"):
+            gemini.ask("k", "q", "f", post=limited)                         # every model at its limit
+        self.assertEqual(set(gemini._resting), set(gemini.MODELS))
+        with self.assertRaisesRegex(gemini.GeminiError, "limit is used up"):
+            gemini.ask("k", "q", "f", post=lambda *a: reply("x"))           # still resting: not even tried
+        gemini._resting.clear()
         with self.assertRaisesRegex(gemini.GeminiError, "didn't accept"):
             gemini.ask("k", "q", "f", post=bad_key)
         with self.assertRaisesRegex(gemini.GeminiError, "No Gemini key"):
