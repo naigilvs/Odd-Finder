@@ -582,3 +582,5 @@
   .ctable td:nth-child(n+3) { text-align: right; } .ctable th:nth-child(n+3) { text-align: right; }
   .cpick .why { display: block; margin-top: 3px; color: var(--chalk); opacity: .8; }
   .cpick .solid { color: var(--turf); font-weight: 700; }
+  .cbet .plain { margin: 6px 0 8px; font-size: 14px; line-height: 1.5; }
+  .cpick .plain { color: var(--chalk); margin-top: 3px; line-height: 1.4; }

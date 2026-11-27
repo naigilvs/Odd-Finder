@@ -572,7 +572,7 @@ function checkAnswer(bet, stakeToo) {
     <div class="cbet">
       <b>${esc(betLabel(row))}</b><span class="muted small">${esc(row.event)}, ${when(row.start)}</span>
       <div class="cyes ${yn[0]}"><b>${esc(yn[1])}</b> — ${esc(yn[2])}.</div>
-      <div class="cverdict ${tone}"><b>${esc(title)}.</b> ${esc(line)}</div>
+      <p class="plain">${esc(plainSummary(row))}</p>
       <div class="cnums">
         <div><b>${pct(ch, 0)}</b>chance</div>
         <div><b>${row.ev != null ? signed(row.ev) : '–'}</b>value</div>
@@ -740,6 +740,53 @@ function inWindow(r, window) {
   return true;
 }
 
+// ---- plain-language summaries: what the numbers mean, without percentages
+function chanceWords(c, verb = 'win') {
+  return c >= 0.75 ? `very likely to ${verb}` : c >= 0.6 ? `more likely to ${verb} than not` : c >= 0.53 ? 'a slight favorite'
+    : c >= 0.47 ? 'basically a coin flip' : c >= 0.4 ? 'a slight underdog' : c >= 0.25 ? 'an underdog' : 'a long shot';
+}
+function priceWords(r) {
+  if (r.ev == null) return null;
+  return r.ev > 0.03 ? 'FanDuel is paying more than it\'s worth: a good price'
+    : r.ev > 0 ? 'FanDuel\'s price is a little generous'
+    : r.ev > -0.02 ? 'the price is about fair, so there\'s no real edge'
+    : 'FanDuel\'s price is too low for those chances, so it isn\'t worth it';
+}
+// "Jokic", "Jackson" (not "Jr."): sports talk uses last names
+function firstName(r) {
+  const w = (r.player || '').split(' ').filter(x => !/^(jr\.?|sr\.?|ii|iii|iv)$/i.test(x));
+  return w[w.length - 1] || r.player;
+}
+
+// One or two plain sentences: what's expected, whether the price is worth it, how much to trust it.
+function plainSummary(r, short) {
+  const s = statOf(r), parts = [];
+  const name = r.player ? firstName(r) : null;
+  if (r.player && s && s.expected_stat != null && r.point != null) {
+    const diff = s.expected_stat - r.point;
+    const vs = Math.abs(diff) < 0.3 ? `right around the ${r.point} line` : diff > 0 ? `more than the ${r.point} line` : `less than the ${r.point} line`;
+    const lean = r.outcome === 'Over' ? (diff > 0 ? ', which favors the over' : diff < 0 ? ', which works against the over' : '')
+      : r.outcome === 'Under' ? (diff < 0 ? ', which favors the under' : diff > 0 ? ', which works against the under' : '') : '';
+    parts.push(`${name} is expected to get about ${s.expected_stat} ${s.stat_name}, ${vs}${lean}.`);
+  } else {
+    const verb = /spreads/.test(r.market) ? 'cover' : /totals|player_/.test(r.market) ? 'hit' : 'win';
+    parts.push(`The bot thinks ${betLabel(r)} is ${chanceWords(chance(r), verb)}.`);   // "Knicks -4.5 is more likely to cover than not"
+  }
+  const price = priceWords(r);
+  if (price) parts.push(price.charAt(0).toUpperCase() + price.slice(1) + '.');
+  else parts.push('Tell me the odds and I\'ll say whether the price is worth it.');
+  if (short) return parts.join(' ');
+  const inj = (injOf(r) || {}).player;
+  if (inj) parts.push(inj.level === 'out' ? `Heads-up: ${inj.name} is listed out.` : `Heads-up: ${inj.name} is ${inj.status.toLowerCase()}, so check before betting.`);
+  if (r.stats_only) parts.push('There\'s no market price for this one, so it\'s based on stats alone: a rough read.');
+  else {
+    const c = confidence(r);
+    parts.push(c.level === 'high' ? 'The numbers line up well, so this is a fairly confident read.'
+      : c.level === 'low' ? 'Treat it as a rough estimate: there isn\'t much to compare it with.' : '');
+  }
+  return parts.filter(Boolean).join(' ');
+}
+
 // Why a bet is on the list, in one line: what the stats expect vs the line, the fair price,
 // and what keeps confidence down.
 function pickReason(r) {
@@ -765,6 +812,7 @@ function pickItem(r, i, mode, listId, number) {
   const poor = mode === 'likely' && r.ev < 0 ? ` <span class="poorprice">⚠ Poor price</span>` : '';
   const solid = r.ev > 0 && confidence(r).level !== 'low' ? ' <span class="solid" title="Positive value and medium or high confidence">✓</span>' : '';
   return `<button type="button" class="cpick" data-l="${listId}" data-i="${i}"><b>${number ? `${number}. ` : ''}${esc(betLabel(r))}</b> ${esc(r.american)}${solid}${poor}
+    <span class="plain small">${esc(plainSummary(r, true))}</span>
     <span class="muted small">${esc(r.event)}, ${when(r.start)} · ${pct(chance(r), 0)} chance · <span class="${r.ev > 0 ? 'up' : 'down'}">${signed(r.ev)}</span> value · ${confidence(r).label}</span>
     <span class="why small">${esc(pickReason(r))}</span></button>`;
 }
