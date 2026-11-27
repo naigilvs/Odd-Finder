@@ -358,7 +358,8 @@ class BotSide(unittest.TestCase):
         bets = [s("Dog", "lost", 0.03, 0.40, None, "h2h", "g9"), s("Fav", "won", -0.04, 0.60, None, "h2h", "g9")]
         self.assertEqual([b["selection"] for b in picks.bot_sides(bets, by="chance")], ["Fav"])
         self.assertEqual([b["selection"] for b in picks.bot_sides(bets)], ["Dog"])
-        likely = picks.track_summary(bets)                                           # the default view
+        self.assertEqual(picks.track_summary(bets)["view"], "side")                  # the default stays the value side
+        likely = picks.track_summary(bets, view="likely")
         self.assertEqual((likely["view"], likely["all"]["wins"], likely["all"]["losses"]), ("likely", 1, 0))
         self.assertEqual(picks.track_summary(bets, view="side")["all"]["losses"], 1)
 

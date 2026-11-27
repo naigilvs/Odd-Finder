@@ -470,7 +470,7 @@ def side_check(bets):
     return out
 
 
-def track_summary(bets, since=None, view="likely"):
+def track_summary(bets, since=None, view="side"):
     """How the bot's predictions turned out, for bets starting on or after `since` (ISO time).
     view: "likely" counts only the side the bot thinks is most likely to win, "side" only the
     side with the better value, "value" only good-value bets, "all" every side logged."""
