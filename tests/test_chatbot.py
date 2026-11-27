@@ -76,7 +76,10 @@ class Reading(unittest.TestCase):
                  "my picks": "picks", "is the bot working": "bot", "how much should i bet": "stake",
                  "what's a push": "term", "what does +150 mean": "term", "is lebron playing": "injury",
                  "mcdavid last 10": "form", "Jayson Tatum": "about", "hello": "help", "asdf qwer": "unknown",
-                 "Tatum over 27.5 points or Brown over 22.5 points": "compare", "over 224.5": "check"}
+                 "Tatum over 27.5 points or Brown over 22.5 points": "compare", "over 224.5": "check",
+                 # questions people actually asked that it first didn't understand
+                 "can u talk to me": "talk", "any nba?": "best", "nba picks": "best", "what about nfl": "best",
+                 "give me nfl picks": "best", "why": "why", "check a bet": "checkhelp"}
         for text, intent in cases.items():
             self.assertEqual(chatbot.parse(text)["intent"], intent, text)
         self.assertEqual(chatbot.parse("best nba props")["sports"], ["basketball_nba"])
@@ -90,6 +93,38 @@ class Reading(unittest.TestCase):
         # next to a Celtics player, "Brown" is Jaylen Brown
         cmp = chatbot.parse("Tatum over 27.5 points or Brown over 22.5 points")["bets"]
         self.assertEqual([b["player"] for b in cmp], ["Jayson Tatum", "Jaylen Brown"])
+
+    def test_follow_ups_use_the_last_bet(self):
+        jokic = {"kind": "player", "sport_key": "basketball_nba", "player": "Nikola Jokic", "team": "Denver Nuggets",
+                 "market": "player_rebounds", "outcome": "Over", "point": 11.5, "odds": -120, "event_id": "g1"}
+        knicks = {"kind": "team", "sport_key": "basketball_nba", "team": "New York Knicks", "opponent": "Boston Celtics",
+                  "market": "spreads", "outcome": "New York Knicks", "point": -4.5, "odds": -110}
+
+        def f(text, ctx):
+            out = chatbot.parse(text, ctx)
+            b = (out.get("bets") or [{}])[0]
+            return out["intent"], b.get("outcome"), b.get("point"), b.get("odds"), b.get("market")
+        self.assertEqual(f("what about the under", jokic), ("check", "Under", 11.5, None, "player_rebounds"))  # new side: old odds dropped
+        self.assertEqual(f("and at -105", jokic), ("check", "Over", 11.5, -105, "player_rebounds"))
+        self.assertEqual(f("what if the line was 12.5", jokic)[:3], ("check", "Over", 12.5))
+        self.assertEqual(f("his assists over 9.5", jokic), ("check", "Over", 9.5, None, "player_assists"))
+        self.assertEqual(f("his assists", jokic)[0], "form")                                   # no line: show his assists
+        self.assertEqual(f("is he playing", jokic)[0], "injury")
+        self.assertEqual(f("last 10", jokic)[0], "form")
+        self.assertEqual(f("how much should i bet on the under", jokic)[:2], ("stake", "Under"))
+        self.assertEqual(f("the other side", knicks), ("check", "Boston Celtics", 4.5, None, "spreads"))
+        self.assertEqual(f("what about 3.5", knicks)[:3], ("check", "New York Knicks", -3.5))
+        self.assertEqual(f("ml +120", knicks), ("check", "New York Knicks", None, 120, "h2h"))
+        self.assertEqual(f("over 224.5", knicks)[1:], ("Over", 224.5, None, "totals"))
+        for text, intent in (("why", "why"), ("save it", "save"), ("best bets in this game", "best"), ("thanks", "thanks")):
+            self.assertEqual(chatbot.parse(text, jokic)["intent"], intent, text)
+        cmp = chatbot.parse("compare that with jokic over 25.5 points", jokic)
+        self.assertEqual((cmp["intent"], [b["market"] for b in cmp["bets"]]), ("compare", ["player_rebounds", "player_points"]))
+        # without a last bet, follow-ups aren't guessed
+        self.assertEqual(chatbot.parse("what about the under", None)["intent"], "unknown")
+        self.assertEqual(chatbot.parse("why", None)["intent"], "why")                           # the page asks for a bet
+        self.assertIsNone(chatbot.clean_ctx({"kind": "player", "sport_key": "x"}))             # no player or team
+        self.assertNotIn("evil", chatbot.clean_ctx(dict(jokic, evil="<script>")))
 
     def test_unknown_questions_are_kept(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(chatbot, "UNKNOWN_FILE", Path(d) / "u.json"):

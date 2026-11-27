@@ -329,14 +329,96 @@ def read_bet(text, sports=None, prefer_teams=()):
     return base                                              # just a team: form, injuries, news
 
 
+# --------------------------------------------------------------------------- follow-ups
+
+CTX_KEYS = {"kind": str, "sport_key": str, "player": str, "team": str, "opponent": str, "market": str,
+            "outcome": str, "point": (int, float), "odds": int, "event_id": str}
+PRONOUN = re.compile(r"\b(he|him|his|they|them|their|it|that|this|same|instead|then|also|and)\b")
+BARE_LINE = re.compile(r"(?:^|\b(?:line (?:was|is|of|at)|at|to|of|about|if it was|if it were))\s*([+-]?\d{1,3}\.5)(?!\d)")
+FLIP = re.compile(r"\b(other side|opposite|flip( it)?|the other team|fade (it|that))\b")
+
+
+def clean_ctx(ctx):
+    """The bet being talked about, as the page sends it back: only known fields, right types."""
+    if not isinstance(ctx, dict) or ctx.get("kind") not in ("team", "player"):
+        return None
+    out = {k: ctx[k] for k, t in CTX_KEYS.items() if isinstance(ctx.get(k), t) and not isinstance(ctx.get(k), bool)}
+    return out if out.get("sport_key") and (out.get("player") or out.get("team")) else None
+
+
+def follow_up(text, ctx):
+    """A follow-up about the last bet ("the under", "at -105", "what about 12.5", "his assists",
+    "is he playing"): that bet with the changes in the text, or None if the text isn't one."""
+    if not ctx:
+        return None
+    odds = read_odds(text)
+    rest = ODDS.sub(" ", text)
+    m = SIDE_LINE.search(rest)
+    side_only = re.search(r"\b(the )?(under|over)\b(?!\s*\d)", rest)
+    bare = None if m else BARE_LINE.search(rest)
+    stat_markets = next((mk for pat, mk in STATS if re.search(pat, rest)), None)
+    spread = SPREAD.search(rest) if ctx["kind"] == "team" else None
+    ml = ctx["kind"] == "team" and re.search(r"\b(ml|moneyline|money line|to win)\b", rest)
+    flip = FLIP.search(rest)
+    asks = re.search(r"\blast \d+\b|\bform\b|\binjur|\bhurt\b|\bplaying\b|\bstatus\b|\bhealthy\b|\brecent(ly)?\b", rest)
+    if not any((odds, m, side_only, bare, stat_markets, spread, ml, flip, asks, PRONOUN.search(rest))):
+        return None
+    b = {k: ctx.get(k) for k in ("kind", "sport_key", "player", "team", "opponent", "market", "outcome", "point")}
+    same_bet = True
+    if stat_markets and ctx["kind"] == "player":
+        market = stat_markets.get(ctx["sport_key"])
+        if not market:
+            return dict(b, odds=None, decimal=None, problem="That stat isn't one I can check for this player's sport.")
+        if market != ctx.get("market"):
+            b.update(market=market, point=None, outcome=b.get("outcome") if b.get("outcome") in ("Over", "Under") else "Over")
+            same_bet = False
+    if ml:
+        b.update(market="h2h", point=None, outcome=b.get("team"))
+        same_bet = same_bet and ctx.get("market") == "h2h"
+    if flip or (side_only and b.get("outcome") in ("Over", "Under") and not m):
+        if b.get("market") in ("spreads", "h2h") and b.get("opponent"):
+            b.update(team=ctx.get("opponent"), opponent=ctx.get("team"), outcome=ctx.get("opponent"))
+            if b.get("point") is not None:
+                b["point"] = -b["point"]
+        elif side_only:
+            b["outcome"] = "Over" if side_only.group(2) == "over" else "Under"
+        else:
+            b["outcome"] = "Under" if b.get("outcome") == "Over" else "Over"
+        same_bet = same_bet and b["outcome"] == ctx.get("outcome")
+    if m:
+        b.update(outcome="Over" if m.group(1) in ("over", "o") else "Under", point=float(m.group(2)))
+        if b.get("market") in ("spreads", "h2h") and ctx["kind"] == "team":
+            b["market"] = "totals"                      # "over 224.5" after a team bet: that game's total
+        same_bet = False
+    elif spread and b.get("market") != "totals":
+        b.update(market="spreads", outcome=b.get("team"), point=float(spread.group(1)))
+        same_bet = False
+    elif bare:
+        val = float(bare.group(1))
+        if b.get("market") == "spreads" and not bare.group(1).startswith(("+", "-")) and (ctx.get("point") or 0) < 0:
+            val = -val                                  # "what about 3.5" after Knicks -4.5 means -3.5
+        b["point"] = val
+        same_bet = False
+    b["odds"] = odds if odds else (ctx.get("odds") if same_bet else None)
+    b["decimal"] = american_to_decimal(b["odds"]) if b["odds"] else None
+    if b.get("kind") == "player" and b.get("market") and b.get("point") is None:
+        b["problem"] = "Say the line for that, e.g. \"over 6.5\"."
+    if b.get("market") is None:
+        b.pop("market")
+    b["followup"] = True
+    return b
+
+
 # --------------------------------------------------------------------------- what is being asked
 
 def _has(text, *patterns):
     return any(re.search(p, text) for p in patterns)
 
 
-def parse(message):
-    """What the message asks for, and the details in it."""
+def parse(message, context=None):
+    """What the message asks for, and the details in it. `context` is the bet talked about
+    last, so follow-ups like "the under" or "is he playing" work."""
+    ctx = clean_ctx(context)
     text = norm(message or "")[:400]
     out = {"text": text, "sports": [s for s, p in SPORT_WORDS.items() if re.search(p, text)]}
     if re.search(r"\bsoccer\b", text):
@@ -344,6 +426,10 @@ def parse(message):
     out["props"] = True if re.search(r"\bprops?\b", text) else None
     if not text:
         return dict(out, intent="help")
+    if re.fullmatch(r"(check|check a bet|check bet|check my bet|check a pick)\??", text):
+        return dict(out, intent="checkhelp")
+    if _has(text, r"\b(can|could|will) (you|u) (talk|chat|speak)\b", r"\btalk to me\b", r"\bare (you|u) (there|real|a bot|an ai)\b"):
+        return dict(out, intent="talk")
     # a betting term?
     m = re.search(r"\b(what('?s| is| are| does)|explain|define|meaning of|mean)\b", text)
     if m and ODDS.search(text) and not find_teams(text) and not find_player(text)[0]:
@@ -362,6 +448,19 @@ def parse(message):
             r"\bbot results\b", r"\bclv\b", r"\btrack record\b", r"\bhow accurate\b"):
         return dict(out, intent="bot")
     stake = _has(text, r"how much (should|to|do) i (bet|wager|put)", r"\b(stake|bet size|how much on)\b")
+    if _has(text, r"^(why|how come|why not|explain( that| it| this)?|reasons?|what makes (it|that))\b\??$"):
+        return dict(out, intent="why")                           # the page answers about the last bet, or asks for one
+    if ctx:
+        if _has(text, r"\b(save|add|keep) (it|that|this)\b", r"\bsave (the )?(bet|pick)\b"):
+            return dict(out, intent="save")
+        if _has(text, r"\b(this|that|same) game\b") and _has(text, r"\b(best|other|else|any|more|value|bets?|props?)\b"):
+            return dict(out, intent="best", event_id=ctx.get("event_id"), here=False)
+        cm = re.search(r"\bcompare (?:it|that|this)?\s*(?:with|to|and|vs\.?|against)\s+(.+)", text)
+        if cm:
+            second = read_bet(cm.group(1), out["sports"] or None, [t for t in (ctx.get("team"), ctx.get("opponent")) if t])
+            first = follow_up("that", ctx)
+            if second.get("market"):
+                return dict(out, intent="compare", bets=[first, second])
     # bets in the text (two joined by "or" / "vs" with lines: compare them)
     parts = [p for p in re.split(r"\s+(?:or|vs\.?|versus)\s+", text) if p.strip()]
     if len(parts) == 2 and all(SIDE_LINE.search(p) or SPREAD.search(p) or ODDS.search(p) or re.search(r"\bml\b", p) for p in parts):
@@ -373,24 +472,31 @@ def parse(message):
         if any(b.get("kind") == "choose" for b in bets):
             return dict(out, intent="choose", bets=[b for b in bets if b.get("kind") == "choose"])
     bet = read_bet(text, out["sports"] or None)
+    if bet.get("kind") in (None, "unclear"):
+        bet = follow_up(text, ctx) or bet
     if bet.get("kind") == "choose":
         return dict(out, intent="choose", bets=[bet])
-    if _has(text, r"\binjur", r"\bis \w+( \w+)? (playing|out|healthy|active)\b", r"\bstatus\b", r"\bplaying (tonight|today)\b"):
+    if _has(text, r"\binjur", r"\bhurt\b", r"\bis \w+( \w+)? (playing|out|healthy|active)\b", r"\bstatus\b", r"\bplaying (tonight|today)\b"):
         if bet.get("kind"):
             return dict(out, intent="injury", bets=[bet])
     if _has(text, r"\blast \d+\b", r"\bform\b", r"\bhow (has|have|is) \w+( \w+)? (been|doing|playing)\b", r"\brecent(ly)?\b", r"\blog\b"):
         if bet.get("kind"):
             return dict(out, intent="form", bets=[bet])
+    if bet.get("followup") and bet.get("kind") == "player" and bet.get("market") and bet.get("point") is None:
+        return dict(out, intent="form", bets=[bet])              # "his assists": show them, ask for a line
     if bet.get("market") or bet.get("problem"):
         return dict(out, intent="stake" if stake else "check", bets=[bet])
     if stake:
         return dict(out, intent="stake")
-    if _has(text, r"\b(best|top|good|value|recommend|suggest|should i bet|what to bet|any (bets|picks|value))\b", r"\bpicks? (for )?(tonight|today|tomorrow)\b", r"\bbets? (tonight|today|tomorrow)\b"):
+    if _has(text, r"\b(best|top|good|value|recommend|suggest|should i bet|what to bet|any (bets|picks|value))\b", r"\bpicks? (for )?(tonight|today|tomorrow)\b", r"\bbets? (tonight|today|tomorrow)\b",
+            r"(?<!my )\bpicks?\b", r"\bany\b.*\b(bets?|props?|games?)\b") or (out["sports"] and not bet.get("kind")):
         return dict(out, intent="best", here=bool(re.search(r"\b(here|these|on screen|this list)\b", text)))
     if bet.get("kind") in ("team", "player"):
         return dict(out, intent="about", bets=[bet])        # just a name: form and injuries
     if _has(text, r"^(hi|hey|hello|yo|sup|help)\b", r"what can you do", r"\bhelp\b"):
         return dict(out, intent="help")
+    if _has(text, r"^(thanks|thank you|thx|ty|cheers|cool|nice|great|ok|okay|got it|perfect)\b"):
+        return dict(out, intent="thanks")
     return dict(out, intent="unknown")
 
 

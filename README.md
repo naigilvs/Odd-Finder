@@ -38,7 +38,7 @@ A chat button (💬 Ask, bottom right; also **Chat** in the ☰ menu and **Ask a
 - **Compare:** `Knicks -4.5 or Knicks Celtics over 224.5`. **Best bets:** `best NBA props tonight`, `best bets here` (the list on screen).
 - **Players and teams:** `Jalen Brunson`, `McDavid last 10 shots`, `is Embiid playing`. **You:** `how am I doing`, `bankroll`, `my picks`, `how much should I bet`. **The bot:** `is the bot working`. **Terms:** `what's a push`, `what is Kelly`.
 
-Players and teams are recognized from the saved box scores and results (short names, nicknames and typos are fine; it asks when a last name fits several players). It doesn't search the internet. Questions it doesn't understand are saved on this computer in `data/chat_unknown.json` so new question types can be added.
+It follows a conversation about the last bet: after `Jokic over 11.5 rebounds -120` you can ask `what about the under`, `and at -105`, `what if the line was 12.5`, `his assists`, `is he playing`, `last 10`, `why`, `how much should I bet`, `save it` (adds it to My picks), `best bets in this game`, or `compare that with Murray over 20.5 points`; after `Knicks -4.5`, `the other side` means the opponent +4.5. Players and teams are recognized from the saved box scores and results (short names, nicknames and typos are fine; it asks when a last name fits several players). It doesn't search the internet. Questions it doesn't understand are saved on this computer in `data/chat_unknown.json` so new question types can be added.
 
 ## Free main lines from TheRundown (no credits)
 

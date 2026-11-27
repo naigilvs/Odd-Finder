@@ -5,7 +5,7 @@
  * rest of the page uses (chance of success, confidence, value, suggested stake).
  * Uses helpers from app.js, which loads first.
  */
-const CHAT = { last: null, busy: false, started: false };
+const CHAT = { last: null, lastBet: null, ctx: null, busy: false, started: false };
 
 const TERM_TEXT = {
   push: 'A <b>push</b> is a tie with the line, like a spread of −3 when the team wins by exactly 3. You get your stake back: no win, no loss.',
@@ -33,7 +33,7 @@ const TERM_TEXT = {
 };
 
 const CHIPS_START = ['Best bets tonight', 'Check a bet', 'How am I doing?', 'Is the bot working?', "What's a push?"];
-const CHIPS_AFTER_BET = ['How much should I bet?', 'Full details', 'Best bets tonight'];
+const CHIPS_AFTER_BET = ['Why?', 'How much should I bet?', 'What about the other side?', 'Save it', 'Full details'];
 
 // ---- the panel
 function openChat(full) {
@@ -73,18 +73,19 @@ async function chatSend(text) {
   if (!text || CHAT.busy) return;
   addMsg('me', esc(text));
   $('#chatInput').value = '';
-  if (text === 'Check a bet') {
+  if (text.toLowerCase() === 'check a bet') {
     return botSay('Type the bet with its odds, for example <i>LeBron over 24.5 points −115</i>, <i>Celtics ML +120</i> or <i>Chiefs Bills over 45.5</i>. No odds? I\'ll use FanDuel\'s when I can.');
   }
   if (text === 'Full details') return CHAT.last ? openBet(CHAT.last) : botSay('Check a bet first, then I can open its full details.');
   CHAT.busy = true;
   const wait = addMsg('bot typing', '…');
   try {
-    const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text }) });
+    const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: text, context: CHAT.ctx }) });
     const p = await r.json();
     wait.remove();
     if (!r.ok || p.error) throw new Error(p.error || r.statusText);
     await answer(p, text);
+    remember(p);
   } catch (e) {
     wait.remove();
     botSay(`Sorry, something went wrong: ${esc(e.message)}`);
@@ -92,10 +93,26 @@ async function chatSend(text) {
   CHAT.busy = false;
 }
 
+// The bet being talked about, sent with the next message so follow-ups work
+// ("the under", "at -105", "his assists", "is he playing").
+function remember(p) {
+  const bets = (p.bets || []).filter(b => (b.kind === 'team' || b.kind === 'player') && !b.error);
+  const b = p.intent === 'compare' ? bets[bets.length - 1] : bets[0];
+  if (!b) return;
+  CHAT.ctx = { kind: b.kind, sport_key: b.sport_key, player: b.player || undefined, team: b.team || undefined,
+    opponent: b.opponent || undefined, market: b.market || undefined, outcome: b.outcome || undefined,
+    point: b.point != null ? b.point : undefined, odds: b.odds || undefined, event_id: b.event_id || undefined };
+}
+
 // ---- answers
 async function answer(p, text) {
   switch (p.intent) {
     case 'help': return botSay(helpText(), CHIPS_START);
+    case 'thanks': return botSay('Anytime! Ask me about another bet whenever you like.', CHIPS_START);
+    case 'talk': return botSay('Sure! I\'m a chatbot for your bets: I answer from the bot\'s own numbers, not opinions. Ask me to check a bet, find the best picks, or follow up with things like <i>what about the under</i>, <i>at −105</i> or <i>is he playing</i>.', CHIPS_START);
+    case 'checkhelp': return botSay('Type the bet with its odds, for example <i>LeBron over 24.5 points −115</i>, <i>Celtics ML +120</i> or <i>Chiefs Bills over 45.5</i>. No odds? I\'ll use FanDuel\'s when I can.');
+    case 'why': return botSay(whyAnswer(), CHIPS_AFTER_BET);
+    case 'save': return saveAnswer();
     case 'term': return botSay(TERM_TEXT[p.term] || 'I don\'t have an explanation for that yet.', ['Best bets tonight', 'Check a bet']);
     case 'record': return botSay(recordAnswer(), ['Bankroll', 'Is the bot working?']);
     case 'bankroll': return botSay(bankrollAnswer(), ['How am I doing?', 'Best bets tonight']);
@@ -113,7 +130,11 @@ async function answer(p, text) {
     case 'check': return checkAnswer(p.bets[0]);
     case 'compare': return compareAnswer(p.bets);
     case 'injury': return botSay(injuryAnswer(p.bets[0]), ['Best bets tonight']);
-    case 'form': return botSay(formAnswer(p.bets[0], true), ['Best bets tonight']);
+    case 'form': {
+      const b = p.bets[0];
+      const ask = b.followup && b.kind === 'player' && b.point == null ? '<br>Tell me the line to check a bet on it, e.g. <i>over 6.5 −115</i>.' : '';
+      return botSay((formAnswer(b, true) || `I don't have recent games for ${esc(b.player || b.team || 'that')}.`) + ask, ['Best bets tonight']);
+    }
     case 'about': return botSay(aboutAnswer(p.bets[0]), ['Best bets tonight']);
     default:
       return botSay(`I didn't understand that one, sorry. I've saved it so I can learn it later. Here's what I can do:<br>${helpText()}`, CHIPS_START);
@@ -197,6 +218,7 @@ function checkAnswer(bet, stakeToo) {
     return botSay(`<b>${esc(bet.selection || bet.player || bet.team)}</b><br>${why}${formAnswer(bet) ? `<br>${formAnswer(bet)}` : ''}`, ['Best bets tonight']);
   }
   CHAT.last = row;
+  CHAT.lastBet = bet;
   const ch = chance(row), [tone, title, line] = verdictOf(row);
   const c = row.stats_only ? { label: 'Low' } : confidence(row);
   const ex = row.stats_only ? statsOnlyReasons(row, bet) : row.decimal ? explain(row) : { good: [], risk: [] };
@@ -229,6 +251,32 @@ function checkAnswer(bet, stakeToo) {
   const div = botSay(html, CHIPS_AFTER_BET);
   if (stakeToo && row.decimal) botSay(stakeLine(row), CHIPS_AFTER_BET);
   return div;
+}
+
+// "Why?": every reason for and against the last bet checked.
+function whyAnswer() {
+  const row = CHAT.last;
+  if (!row) return 'Check a bet first, then ask me why.';
+  if (!row.decimal) return 'I need the odds to say whether it\'s worth it: tell me the price, like <i>−115</i>.';
+  const ex = row.stats_only ? statsOnlyReasons(row, CHAT.lastBet || {}) : explain(row);
+  const c = row.stats_only ? null : confidence(row);
+  return `<b>${esc(betLabel(row))}</b>` +
+    (ex.good.length ? `<br>For it:<ul class="good">${ex.good.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : '<br>Nothing stands out in its favor.') +
+    (ex.risk.length ? `Against it:<ul class="risk">${ex.risk.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : '') +
+    (c ? `<span class="muted small">${c.label} confidence because of: ${esc(c.why)}.</span>` : '');
+}
+
+async function saveAnswer() {
+  const row = CHAT.last;
+  if (!row) return botSay('Check a bet first, then say <i>save it</i>.');
+  if (savedPick(row)) return botSay(`${esc(betLabel(row))} is already in My picks.`, CHIPS_AFTER_BET);
+  if (!row.decimal) return botSay('I need the odds before saving it: tell me the price, like <i>−115</i>.');
+  try {
+    await toggleSave(row, null);
+    botSay(`Saved <b>${esc(betLabel(row))}</b> ${esc(row.american)} to My picks. It's graded automatically after the game; tap ★ there to remove it.`, CHIPS_AFTER_BET);
+  } catch (e) {
+    botSay(`I couldn't save it: ${esc(e.message)}`);
+  }
 }
 
 function stakeLine(row) {
@@ -303,6 +351,10 @@ function bestAnswer(p) {
   const now = new Date().toISOString();
   let rows = p.here && state.shown && state.shown.length ? state.shown : scannedRows();
   rows = rows.filter(r => r.start > now);
+  if (p.event_id) {
+    rows = rows.filter(r => r.event_id === p.event_id);
+    if (!rows.length) return botSay('I don\'t have scanned bets for that game yet. Scan its league in Find bets (main lines are free), or <b>More bets</b> for its props, then ask again.', ['Check a bet']);
+  }
   if (!rows.length) {
     return botSay(`I don't have any scanned bets yet. Go to <b>Find bets</b> and press Scan (main lines are free with TheRundown), then ask me again.`, ['Check a bet']);
   }
@@ -386,6 +438,10 @@ function askAboutBet(r) {
   $('#betModal').close();
   openChat(false);
   CHAT.last = r;
+  CHAT.ctx = { kind: r.player ? 'player' : 'team', sport_key: r.sport_key, player: r.player || undefined,
+    team: r.pick_team || undefined, opponent: r.pick_team ? (r.pick_team === r.home_team ? r.away_team : r.home_team) : undefined,
+    market: r.market.replace(/^alternate_/, ''), outcome: r.outcome, point: r.point != null ? r.point : undefined, event_id: r.event_id };
+  if (!r.player && !r.pick_team) Object.assign(CHAT.ctx, { team: r.home_team, opponent: r.away_team });
   addMsg('me', esc(`Check ${betLabel(r)} ${r.american}`));
   const bet = { kind: r.player ? 'player' : 'team', sport_key: r.sport_key, event_id: r.event_id, selection: r.selection,
     market: r.market.replace(/^alternate_/, ''), player: r.player, team: r.pick_team, outcome: r.outcome, point: r.point,

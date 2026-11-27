@@ -764,9 +764,10 @@ def chat_bet(bet):
     return bet
 
 
-def chat_answer(message):
-    """What the chat message asks, with the data the page needs to answer it."""
-    p = chatbot.parse(message)
+def chat_answer(message, context=None):
+    """What the chat message asks, with the data the page needs to answer it. `context` is the
+    bet talked about last (for follow-ups like "the under" or "is he playing")."""
+    p = chatbot.parse(message, context)
     if p["intent"] == "unknown":
         chatbot.log_unknown(message)
     for b in p.get("bets", []):
@@ -1101,7 +1102,7 @@ class Handler(BaseHTTPRequestHandler):
             found, pending = IMAGES.get(items)
             return self.send_json({"images": found, "pending": pending})
         if path == "/api/chat":
-            return self.send_json(chat_answer(str(body.get("message") or "")[:500]))
+            return self.send_json(chat_answer(str(body.get("message") or "")[:500], body.get("context")))
         if path == "/api/injuries":
             return self.send_json(injuries.lookup(items, demo_injury_report if DEMO else injuries.report))
         if DEMO:
