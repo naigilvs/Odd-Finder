@@ -23,7 +23,7 @@ STATUSES = {"pending", "won", "lost", "push"}
 # What we keep about a pick when it's saved (anything else sent is ignored).
 TEXT_FIELDS = ["event_id", "sport_key", "sport", "event", "home_team", "away_team", "start", "market",
                "market_label", "selection", "label", "outcome", "team_total_for", "player", "american",
-               "book", "confidence"]
+               "book", "confidence", "odds_source"]
 NUMBER_FIELDS = ["point", "decimal", "chance", "fair_prob", "stats_prob", "book_prob", "ev"]
 
 
@@ -262,7 +262,9 @@ class TrackStore(PickStore):
     def _write(self):
         self.path.parent.mkdir(exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.picks, separators=(",", ":")))   # compact: this file grows
+        # compact, one bet per line: this file grows, and the hourly GitHub backup then stores
+        # only the lines that changed instead of a whole new copy each time
+        tmp.write_text("[\n" + ",\n".join(json.dumps(b, separators=(",", ":")) for b in self.picks) + "\n]\n")
         tmp.replace(self.path)
 
     def log(self, bets, now=None):
@@ -295,7 +297,7 @@ class TrackStore(PickStore):
                             "status": "pending", "auto": True})
                 # The price when first seen: later scans update the current price, so the two
                 # show how the line moved (and, near the start, how the closing price compares).
-                bet.update({f"open_{k}": bet[k] for k in ("american", "decimal", "fair_prob", "point") if k in bet})
+                bet.update({f"open_{k}": bet[k] for k in ("american", "decimal", "fair_prob", "point", "odds_source") if k in bet})
                 if near_start and "fair_prob" in bet:
                     _set_close(bet, bet["fair_prob"], bet["decimal"], now, "scan")
                 self.picks.append(bet)
@@ -539,6 +541,9 @@ def track_summary(bets, since=None, view="side"):
         "calibration": calibration,
         "by_confidence": [r for lvl in ("High", "Medium", "Low") for r in group(lambda b: b.get("confidence") or "–") if r["name"] == lvl],
         "by_league": group(lambda b: b.get("sport") or b["sport_key"]),
+        "by_source": group(lambda b: b.get("odds_source") or "earlier",
+                           lambda k: {"therundown": "Free odds (TheRundown: 2 books)", "odds_api": "The Odds API (about 10 books)",
+                                      "earlier": "Before sources were recorded"}.get(k, k)),
         "by_type": group(lambda b: base_market(b["market"]),
                          lambda k: {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total", "team_totals": "Team total",
                                     **{m: "Player " + cfg["labels"][st] for cfg in props_stats.SPORTS.values()

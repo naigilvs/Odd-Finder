@@ -158,21 +158,51 @@ def convert(ev, sport_key, sport_title):
             "source": "therundown"}
 
 
+SAME_WORD = {"state": "st", "saint": "st", "univ": "", "university": ""}
+
+
+def _name(n):
+    """A team name for matching: "Iowa State Cyclones" and "Iowa St Cyclones" are the same."""
+    words = [SAME_WORD.get(w, w) for w in stats.normalize(n or "").split()]
+    n = " ".join(w for w in words if w)
+    return stats.ALIASES.get(n, n)
+
+
+def _exact(a, b):
+    """Same team (full name, not just the nickname)."""
+    na, nb = _name(a), _name(b)
+    return bool(na) and na == nb
+
+
 def match_ids(events, odds_api_games):
     """Give each converted game The Odds API's id and team names when the same game is on its
-    list: start within 3 hours and at least one team the same (a team plays once a day)."""
+    list: start within 3 hours, and one team's full name matches (or, in pro leagues, both
+    teams' nicknames). Nicknames alone aren't enough in college sports, where many schools
+    are "Wildcats" or "Tigers" and play at the same time. The best match wins; each game once."""
+    used = set()
     for ev in events:
         start = datetime.fromisoformat(ev["commence_time"].replace("Z", "+00:00"))
+        best, best_score = None, 0
         for g in odds_api_games:
+            if g["id"] in used:
+                continue
             gs = datetime.fromisoformat(g["commence_time"].replace("Z", "+00:00"))
             if abs((gs - start).total_seconds()) > 3 * 3600:
                 continue
-            same_home = stats._same_team(ev["home_team"], g.get("home_team") or "")
-            same_away = stats._same_team(ev["away_team"], g.get("away_team") or "")
-            if same_home or same_away:
-                ev.update(id=g["id"], home_team=g.get("home_team"), away_team=g.get("away_team"),
-                          commence_time=g["commence_time"], sport_title=g.get("sport_title") or ev["sport_title"])
-                break
+            h, a = g.get("home_team") or "", g.get("away_team") or ""
+            # home and away can be listed the other way round for neutral-site games
+            exact = max(_exact(ev["home_team"], h) + _exact(ev["away_team"], a),
+                        _exact(ev["home_team"], a) + _exact(ev["away_team"], h))
+            nick = max(stats._same_team(ev["home_team"], h) + stats._same_team(ev["away_team"], a),
+                       stats._same_team(ev["home_team"], a) + stats._same_team(ev["away_team"], h))
+            score = 2 * exact + nick
+            college = "ncaa" in (ev.get("sport_key") or "")             # nicknames repeat across schools
+            if (exact >= 1 or (nick == 2 and not college)) and score > best_score:
+                best, best_score = g, score
+        if best:
+            used.add(best["id"])
+            ev.update(id=best["id"], home_team=best.get("home_team"), away_team=best.get("away_team"),
+                      commence_time=best["commence_time"], sport_title=best.get("sport_title") or ev["sport_title"])
     return events
 
 

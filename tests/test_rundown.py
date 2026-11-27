@@ -112,3 +112,40 @@ class MatchAndFetch(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewFixes(unittest.TestCase):
+    def test_college_nicknames_dont_steal_another_game(self):
+        ev = lambda h, a: {"id": "rd_x", "home_team": h, "away_team": a, "commence_time": "2026-11-28T00:00:00Z",
+                           "sport_title": "NCAAB", "sport_key": "basketball_ncaab", "bookmakers": []}
+        games = [{"id": "A", "home_team": "Kentucky Wildcats", "away_team": "Duke Blue Devils", "commence_time": "2026-11-28T00:00:00Z"},
+                 {"id": "B", "home_team": "Arizona Wildcats", "away_team": "Memphis Tigers", "commence_time": "2026-11-28T00:30:00Z"}]
+        evs = [ev("Kansas St Wildcats", "LSU Tigers"), ev("Arizona Wildcats", "Memphis Tigers"), ev("Kentucky Wildcats", "Duke Blue Devils")]
+        rundown.match_ids(evs, games)
+        self.assertEqual([e["id"] for e in evs], ["rd_x", "B", "A"])        # Kansas St matches nothing
+
+    def test_free_rows_say_where_their_odds_came_from(self):
+        ev = rundown.convert(event(start="2099-01-01T00:00:00Z"), "americanfootball_nfl", "NFL")
+        with mock.patch.object(app, "RUNDOWN_KEY", "k"), mock.patch.object(app, "DEMO", False), \
+                mock.patch.object(rundown, "fetch_events", return_value=[ev]), \
+                mock.patch.object(app, "api_get", side_effect=app.ApiError("x")):
+            rows = app.run_scan("fanduel", ["americanfootball_nfl"], False, 1, "therundown")["rows"]
+        self.assertTrue(rows and all(r["odds_source"] == "therundown" for r in rows))
+
+    def test_scans_without_props_keep_saved_props(self):
+        import tempfile
+        from pathlib import Path
+        import scans
+        with tempfile.TemporaryDirectory() as d:
+            store = scans.ScanStore(Path(d) / "scans.json")
+            future = "2099-01-01T00:00:00Z"
+            prop = {"event_id": "g1", "market": "player_points", "selection": "P Over 20.5", "player": "P", "start": future,
+                    "sport_key": "basketball_nba"}
+            old_prop = dict(prop, selection="Q Over 9.5", start="2000-01-01T00:00:00Z")      # game over: dropped
+            store.save_main("fanduel", ["basketball_nba"], [prop, old_prop])
+            main = {"event_id": "g1", "market": "h2h", "selection": "A", "player": None, "start": future, "sport_key": "basketball_nba"}
+            with mock.patch.object(app, "SCANS", store):
+                rows = app.keep_saved_props("fanduel", ["basketball_nba"], [main], False)
+                self.assertEqual(app.keep_saved_props("fanduel", ["basketball_nba"], [main], True), [main])
+        self.assertEqual([r["selection"] for r in rows], ["A", "P Over 20.5"])
+        self.assertTrue(rows[1]["scanned_at"])                                 # keeps when it was scanned

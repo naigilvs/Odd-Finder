@@ -86,7 +86,8 @@ async function loadAutoscan(first) {
   // a newer automatic scan than the page has: load it
   if (s && s.last_at && !first && AUTO.seen && s.last_at > AUTO.seen) {
     await loadSavedScans();
-    Object.keys(state.results).forEach(k => state.picked.add(k));
+    const unticked = new Set(JSON.parse(localStorage.getItem('oddfinder.unticked') || '[]'));
+    Object.keys(state.results).forEach(k => { if (!unticked.has(k)) state.picked.add(k); });
     renderAll();
   }
   if (s) AUTO.seen = s.last_at || AUTO.seen || '';
@@ -1277,6 +1278,7 @@ async function logTrack() {
       label: betLabel(r), outcome: r.outcome, team_total_for: r.team_total_for, player: r.player, american: r.american, point: r.point,
       decimal: r.decimal, chance: c, fair_prob: r.fair_prob, stats_prob: s && s.prob != null ? s.prob : undefined,
       book_prob: r.book_prob, ev: r.ev, confidence: confidence(r).label, agree: agrees(r), book: state.book.name,
+      odds_source: r.odds_source || (r.books_used.length <= 2 ? 'therundown' : 'odds_api'),
     });
   }
   if (!bets.length) return;
@@ -1426,6 +1428,7 @@ function renderBot(s) {
     table('When the bot said…', 'If its chances are right, each row wins about as often as expected. Give it a few hundred bets before reading much into it.', s.calibration, 'Chance of success') +
     table('By confidence', 'High confidence should be the most reliable.', s.by_confidence, 'Confidence') +
     table('By league', '', s.by_league, 'League') +
+    table('By odds source', 'Free odds compare FanDuel with only 2 books, so their value estimates are rougher.', s.by_source || [], 'Odds from') +
     table('By bet type', '', s.by_type, 'Bet type');
 
   $('#bRecentTitle').hidden = !s.recent.length;

@@ -718,7 +718,7 @@ def log_scanned(rows):
         nums = picks.page_numbers(r, found.get(it["key"]), inj.get(it["key"]))
         bets.append(dict({k: r.get(k) for k in ("event_id", "sport_key", "sport", "event", "home_team", "away_team", "start",
                                                   "market", "market_label", "selection", "outcome", "team_total_for", "player",
-                                                  "american", "point", "decimal", "fair_prob", "book_prob", "ev")},
+                                                  "american", "point", "decimal", "fair_prob", "book_prob", "ev", "odds_source")},
                          label=r["selection"], book=TARGET_BOOKS["fanduel"], **{k: v for k, v in nums.items() if v is not None}))
     return TRACK.log(bets)
 
@@ -741,7 +741,7 @@ def autoscan_once(now=None):
     sports = [x for x in cfg["sports"] if x in rundown.SPORT_IDS]
     try:
         res = run_scan("fanduel", sports, False, 1, "therundown")
-        SCANS.save_main("fanduel", sports, res["rows"])
+        SCANS.save_main("fanduel", sports, keep_saved_props("fanduel", sports, res["rows"], False))
         log_scanned(res["rows"])
         AUTOSCAN.update(last_at=now.isoformat(), last_count=len(res["rows"]),
                         last_error="; ".join(res["errors"]) or None)
@@ -794,6 +794,24 @@ def closing_scan_once(now=None):
         rows = [r for ev in events if ev["id"] in games for r in analyze_event(ev, "fanduel", 1)]
         done += TRACK.record_closes(rows, now)
     return done
+
+
+def keep_saved_props(target, sports, rows, include_props, now=None):
+    """A scan without player props (free odds, the chat's refresh, automatic scans) would
+    replace those leagues' saved results and lose props you scanned with credits. Keep the
+    saved props for games that haven't started, marked with when they were scanned."""
+    if include_props:
+        return rows
+    now = (now or datetime.now(timezone.utc)).isoformat()
+    saved = SCANS.load(target)["results"]
+    have = {(r["event_id"], r["market"], r["selection"]) for r in rows}
+    kept = []
+    for sport in sports:
+        league = saved.get(sport) or {}
+        for r in league.get("rows", []):
+            if r.get("player") and r.get("start", "") > now and (r["event_id"], r["market"], r["selection"]) not in have:
+                kept.append(dict(r, scanned_at=r.get("scanned_at") or league.get("at")))
+    return rows + kept
 
 
 def closing_scans():
@@ -985,7 +1003,10 @@ def run_scan(target, sports, include_props, min_books, source="odds_api"):
             for ev in events:
                 if parse_time(ev["commence_time"]) <= now:
                     continue  # skip games already underway; live odds move too fast
-                rows.extend(analyze_event(ev, target, min_books))
+                for r in analyze_event(ev, target, min_books):
+                    # where the main-line odds came from (props always come from The Odds API)
+                    r["odds_source"] = "therundown" if ev.get("source") == "therundown" and not r.get("player") else "odds_api"
+                    rows.append(r)
     rows.sort(key=lambda r: r["ev"], reverse=True)
     return {
         "book": TARGET_BOOKS[target], "demo": DEMO, "generated": now.isoformat(),
@@ -1422,6 +1443,7 @@ class Handler(BaseHTTPRequestHandler):
                 min_books = max(1, int(q.get("min_books", ["2"])[0]))
                 source = q.get("source", ["odds_api"])[0]
                 result = run_scan(target, sports, props, min_books, source)
+                result["rows"] = keep_saved_props(target, sports, result["rows"], props)
                 SCANS.save_main(target, sports, result["rows"])
                 self.send_json(result)
             elif url.path == "/api/saved-scans":

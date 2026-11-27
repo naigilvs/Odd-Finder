@@ -169,6 +169,14 @@ class TrackRecord(unittest.TestCase):
         self.assertEqual((b["open_decimal"], b["open_american"]), (2.2, "+120"))
         self.assertEqual((b["decimal"], b["american"]), (2.0, "+100"))
 
+    def test_file_has_one_bet_per_line_and_reads_back(self):
+        self.track.log([pick(start=FUTURE), pick(start=FUTURE, event_id="g2", odds_source="therundown")])
+        text = self.track.path.read_text()
+        self.assertEqual(text.count("\n"), 4)                                  # [, two bets, ]
+        again = picks.TrackStore(self.track.path).all()
+        self.assertEqual(len(again), 2)
+        self.assertEqual(next(b for b in again if b["event_id"] == "g2")["open_odds_source"], "therundown")
+
     def test_finished_bets_are_not_changed_by_rescans(self):
         self.track.log([pick(start=FUTURE)])
         self.track.picks[0]["status"] = "won"
