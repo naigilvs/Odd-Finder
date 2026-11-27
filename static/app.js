@@ -73,6 +73,63 @@ async function pickBook(key) {
   // Old servers don't send `outdated`; a page newer than its server is the same problem.
   $('#restartBar').hidden = !(state.cfg.outdated || !('outdated' in state.cfg));
   renderAll();
+  loadAutoscan(true);
+}
+
+/* ---------------- automatic scans (free main lines every few hours, run by the bot) ---------------- */
+const AUTO = { status: null, seen: null, editing: false, timer: null };
+const fmtTime = iso => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+async function loadAutoscan(first) {
+  try { AUTO.status = await getJSON('/api/autoscan'); } catch (e) { AUTO.status = null; }
+  const s = AUTO.status;
+  // a newer automatic scan than the page has: load it
+  if (s && s.last_at && !first && AUTO.seen && s.last_at > AUTO.seen) {
+    await loadSavedScans();
+    Object.keys(state.results).forEach(k => state.picked.add(k));
+    renderAll();
+  }
+  if (s) AUTO.seen = s.last_at || AUTO.seen || '';
+  renderAutoLine();
+  clearTimeout(AUTO.timer);
+  AUTO.timer = setTimeout(() => loadAutoscan(false), 5 * 60 * 1000);      // check again in 5 minutes
+}
+
+function renderAutoLine() {
+  const s = AUTO.status, el = $('#autoLine');
+  el.hidden = !s || !s.available;
+  if (el.hidden) return;
+  const names = s.sports.map(k => (state.sports.find(x => x.key === k) || {}).title || k).join(', ');
+  if (AUTO.editing) {
+    const ticked = [...state.picked].filter(k => s.available && (state.cfg.rundown_sports || []).includes(k));
+    el.innerHTML = `<div class="auto-edit">
+      <label class="toggle"><input type="checkbox" id="autoOn" ${s.enabled ? 'checked' : ''}> Scan automatically (free)</label>
+      <label>Every <select id="autoHours">${s.hours.map(h => `<option value="${h}" ${h === s.every_hours ? 'selected' : ''}>${h} hours</option>`).join('')}</select></label>
+      <span class="muted small">Leagues: ${esc(names)}</span>
+      ${ticked.length ? `<button type="button" class="linkbtn" id="autoUseTicked">Use the ticked leagues (${ticked.length})</button>` : ''}
+      <span class="muted small">Main lines only, no credits. Paused ${s.quiet[0]}–${s.quiet[1]} a.m.; needs the bot running.</span>
+      <span><button type="button" class="linkbtn" id="autoCancel">Cancel</button> <button type="button" class="btn-scan small" id="autoSave">Save</button></span></div>`;
+    $('#autoCancel').onclick = () => { AUTO.editing = false; renderAutoLine(); };
+    $('#autoSave').onclick = () => saveAutoscan({ enabled: $('#autoOn').checked, every_hours: +$('#autoHours').value });
+    if ($('#autoUseTicked')) $('#autoUseTicked').onclick = () => saveAutoscan({ sports: ticked, enabled: $('#autoOn').checked, every_hours: +$('#autoHours').value });
+    return;
+  }
+  el.innerHTML = s.enabled
+    ? `Auto-scan on: every ${s.every_hours} h (free) · ${esc(names)}${s.last_at ? ` · last ${fmtTime(s.last_at)}` : ' · first one soon'}${s.last_error ? ` <span class="warn" title="${esc(s.last_error)}">⚠</span>` : ''} <button type="button" class="linkbtn" id="autoEdit">Change</button>`
+    : `Auto-scan off <button type="button" class="linkbtn" id="autoEdit">Turn on</button>`;
+  $('#autoEdit').onclick = () => { AUTO.editing = true; renderAutoLine(); };
+}
+
+async function saveAutoscan(changes) {
+  try {
+    const r = await fetch('/api/autoscan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+    AUTO.status = j;
+    AUTO.editing = false;
+    setStatus(j.enabled ? `Automatic scans on: every ${j.every_hours} hours.` : 'Automatic scans off.');
+  } catch (e) { setStatus(e.message, true); }
+  renderAutoLine();
 }
 
 const storeKey = () => `oddfinder.results.${state.cfg.demo ? 'demo.' : ''}${state.book.key}`;

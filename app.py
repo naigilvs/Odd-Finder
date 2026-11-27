@@ -649,6 +649,128 @@ def analyze_event(event, target, min_books):
     return rows
 
 
+# --------------------------------------------------------------------------- automatic scans
+
+AUTOSCAN_DEFAULTS = {"enabled": True, "sports": ["basketball_nba", "icehockey_nhl", "americanfootball_nfl"],
+                     "every_hours": 3, "last_at": None, "last_count": None, "last_error": None}
+AUTOSCAN_HOURS = (2, 3, 4, 6)
+QUIET_HOURS = range(2, 8)          # no automatic scans from 2 to 8 a.m. (lines barely move; saves free points)
+MIN_FREE_POINTS = 3000             # leave this much of TheRundown's daily allowance for your own scans
+
+
+class AutoScanSettings:
+    """Which leagues scan on their own and how often, in data/autoscan.json."""
+
+    def __init__(self, path):
+        self.path = path
+        self.lock = threading.Lock()
+        try:
+            saved = json.loads(path.read_text())
+        except (OSError, ValueError):
+            saved = {}
+        self.data = dict(AUTOSCAN_DEFAULTS, **{k: v for k, v in saved.items() if k in AUTOSCAN_DEFAULTS})
+
+    def get(self):
+        with self.lock:
+            return dict(self.data)
+
+    def update(self, **changes):
+        with self.lock:
+            self.data.update(changes)
+            self.path.parent.mkdir(exist_ok=True)
+            self.path.write_text(json.dumps(self.data, indent=1))
+            return dict(self.data)
+
+    def set_from_page(self, body):
+        """The settings the page sends: on/off, how often, which leagues (free ones only)."""
+        changes = {}
+        if isinstance(body.get("enabled"), bool):
+            changes["enabled"] = body["enabled"]
+        if body.get("every_hours") in AUTOSCAN_HOURS:
+            changes["every_hours"] = body["every_hours"]
+        if isinstance(body.get("sports"), list):
+            sports = [x for x in body["sports"] if isinstance(x, str) and x in rundown.SPORT_IDS][:10]
+            if not sports:
+                raise ValueError("Pick at least one league TheRundown covers for free.")
+            changes["sports"] = sports
+        return self.update(**changes)
+
+
+AUTOSCAN = None
+
+
+def log_scanned(rows):
+    """Log bets the bot scanned on its own to the results tracker, with the same chance and
+    confidence the page would give them (stats opinions and injury news included)."""
+    items = [{"key": f"{r['event_id']}|{r['market']}|{r['selection']}", "sport_key": r["sport_key"], "market": r["market"],
+              "outcome": r["outcome"], "point": r.get("point"), "home": r.get("home_team"), "away": r.get("away_team"),
+              "team": r.get("team_total_for"), "player": r.get("player"), "fair_prob": r["fair_prob"]} for r in rows]
+    found = {}
+    for _ in range(6):                                  # stats models may still be loading
+        got, pending = stats.predict_many(items)
+        found.update(got)
+        if not pending:
+            break
+        time.sleep(20)
+    inj = injuries.lookup(items)["injuries"]
+    bets = []
+    for r, it in zip(rows, items):
+        nums = picks.page_numbers(r, found.get(it["key"]), inj.get(it["key"]))
+        bets.append(dict({k: r.get(k) for k in ("event_id", "sport_key", "sport", "event", "home_team", "away_team", "start",
+                                                  "market", "market_label", "selection", "outcome", "team_total_for", "player",
+                                                  "american", "point", "decimal", "fair_prob", "book_prob", "ev")},
+                         label=r["selection"], book=TARGET_BOOKS["fanduel"], **{k: v for k, v in nums.items() if v is not None}))
+    return TRACK.log(bets)
+
+
+def autoscan_once(now=None):
+    """Scan the chosen leagues with TheRundown's free odds if one is due. Returns what happened."""
+    if not AUTOSCAN or not RUNDOWN_KEY or DEMO:
+        return "off"
+    cfg = AUTOSCAN.get()
+    now = now or datetime.now(timezone.utc)
+    if not cfg["enabled"]:
+        return "off"
+    if cfg["last_at"] and (now - datetime.fromisoformat(cfg["last_at"])).total_seconds() < cfg["every_hours"] * 3600 - 60:
+        return "not due"
+    if now.astimezone().hour in QUIET_HOURS:
+        return "quiet hours"
+    if rundown.usage.get("remaining") is not None and rundown.usage["remaining"] < MIN_FREE_POINTS:
+        AUTOSCAN.update(last_error="Skipped: TheRundown's free daily points are nearly used up.")
+        return "low points"
+    sports = [x for x in cfg["sports"] if x in rundown.SPORT_IDS]
+    try:
+        res = run_scan("fanduel", sports, False, 1, "therundown")
+        SCANS.save_main("fanduel", sports, res["rows"])
+        log_scanned(res["rows"])
+        AUTOSCAN.update(last_at=now.isoformat(), last_count=len(res["rows"]),
+                        last_error="; ".join(res["errors"]) or None)
+        return "scanned"
+    except Exception as e:  # try again next round
+        AUTOSCAN.update(last_error=f"Couldn't scan: {e}")
+        return "error"
+
+
+def autoscans():
+    """Background: check every 10 minutes whether an automatic scan is due."""
+    time.sleep(60)                                      # let the server and models start first
+    while True:
+        try:
+            autoscan_once()
+        except Exception as e:
+            print(f"Automatic scan skipped: {e}")
+        time.sleep(600)
+
+
+def autoscan_status():
+    cfg = AUTOSCAN.get() if AUTOSCAN else dict(AUTOSCAN_DEFAULTS, enabled=False)
+    nxt = None
+    if cfg["enabled"] and cfg["last_at"]:
+        nxt = (datetime.fromisoformat(cfg["last_at"]) + timedelta(hours=cfg["every_hours"])).isoformat()
+    return dict(cfg, next_at=nxt, available=bool(RUNDOWN_KEY) and not DEMO, hours=list(AUTOSCAN_HOURS),
+                quiet=[QUIET_HOURS.start, QUIET_HOURS.stop])
+
+
 def closing_scan_once(now=None):
     """Closing prices for tracked moneylines, spreads and totals whose games start within 15
     minutes, from TheRundown's free odds (no credits). Returns how many bets got one."""
@@ -1067,7 +1189,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self):
         path = urllib.parse.urlparse(self.path).path
-        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans", "/api/wagers", "/api/injuries", "/api/chat"):
+        if path not in ("/api/images", "/api/stats", "/api/picks", "/api/track", "/api/saved-scans", "/api/wagers", "/api/injuries", "/api/chat", "/api/autoscan"):
             return self.send_json({"error": "Not found"}, 404)
         length = int(self.headers.get("Content-Length") or 0)
         if length > 20_000_000:          # room for a full browser copy of saved scans
@@ -1101,6 +1223,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/images":
             found, pending = IMAGES.get(items)
             return self.send_json({"images": found, "pending": pending})
+        if path == "/api/autoscan":
+            if not AUTOSCAN:
+                return self.send_json({"error": "Automatic scans are off in demo mode."}, 400)
+            try:
+                AUTOSCAN.set_from_page(body)
+            except ValueError as e:
+                return self.send_json({"error": str(e)}, 400)
+            return self.send_json(autoscan_status())
         if path == "/api/chat":
             return self.send_json(chat_answer(str(body.get("message") or "")[:500], body.get("context")))
         if path == "/api/injuries":
@@ -1208,6 +1338,8 @@ class Handler(BaseHTTPRequestHandler):
                                 "prop_sports": list(PROP_MARKETS),
                                 "rundown": bool(RUNDOWN_KEY) and not DEMO, "rundown_usage": rundown.usage,
                                 "rundown_sports": list(rundown.SPORT_IDS)})
+            elif url.path == "/api/autoscan":
+                self.send_json(autoscan_status())
             elif url.path == "/api/accuracy":
                 self.send_json(stats.accuracy())
             elif url.path == "/api/sports":
@@ -1257,7 +1389,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global DEMO, API_KEY, RUNDOWN_KEY, IMAGES, PICKS, TRACK, BACKUP, GITBACKUP, SCANS, WAGERS
+    global DEMO, API_KEY, RUNDOWN_KEY, AUTOSCAN, IMAGES, PICKS, TRACK, BACKUP, GITBACKUP, SCANS, WAGERS
     ap = argparse.ArgumentParser(description="Betting value finder")
     ap.add_argument("--demo", action="store_true", help="use made-up sample data")
     ap.add_argument("--port", type=int, default=8765)
@@ -1296,6 +1428,8 @@ def main():
     stats.warm_up()   # start downloading past results in the background
     if RUNDOWN_KEY and not DEMO:
         threading.Thread(target=closing_scans, daemon=True).start()   # free closing prices for CLV
+        AUTOSCAN = AutoScanSettings(stats.DATA_DIR / "autoscan.json")
+        threading.Thread(target=autoscans, daemon=True).start()        # free main-line scans every few hours
     if DEMO and not args.demo:
         print("No API key found (ODDS_API_KEY or config.json), so running with DEMO data.")
     try:

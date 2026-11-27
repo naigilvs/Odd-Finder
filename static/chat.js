@@ -5,7 +5,9 @@
  * rest of the page uses (chance of success, confidence, value, suggested stake).
  * Uses helpers from app.js, which loads first.
  */
-const CHAT = { last: null, lastBet: null, ctx: null, busy: false, started: false };
+const CHAT = { last: null, lastBet: null, ctx: null, busy: false, started: false, lists: {}, nextList: 1 };
+const CHAT_KEY = 'oddfinder.chat';
+const CHAT_MAX_MESSAGES = 80;
 
 const TERM_TEXT = {
   push: 'A <b>push</b> is a tie with the line, like a spread of −3 when the team wins by exactly 3. You get your stake back: no win, no loss.',
@@ -45,6 +47,7 @@ function openChat(full) {
     botSay(`Hi! I answer from the bot's own numbers: scans, stats models, injuries and your records. Ask me about a bet, like <i>Jokic over 11.5 rebounds −120</i> or <i>Knicks −4.5</i>, or tap a suggestion.`, CHIPS_START);
   }
   $('#chatInput').focus();
+  $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
 }
 function closeChat() {
   $('#chatPanel').hidden = true;
@@ -57,12 +60,44 @@ function addMsg(who, html) {
   div.innerHTML = html;
   $('#chatLog').appendChild(div);
   $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
+  if (!who.includes('typing')) saveChat();
   return div;
 }
 function botSay(html, chips) {
   const div = addMsg('bot', html);
   setChips(chips || []);
+  saveChat();
   return div;
+}
+
+// The conversation is kept in this browser until you start a new chat (✎).
+function saveChat() {
+  try {
+    const log = $('#chatLog');
+    while (log.querySelectorAll('.cmsg:not(.typing)').length > CHAT_MAX_MESSAGES) log.querySelector('.cmsg:not(.typing)').remove();
+    const used = new Set([...log.querySelectorAll('.cpick')].map(b => b.dataset.l));
+    Object.keys(CHAT.lists).forEach(id => { if (!used.has(id)) delete CHAT.lists[id]; });
+    const html = [...log.querySelectorAll('.cmsg:not(.typing)')].map(m => m.outerHTML).join('');
+    localStorage.setItem(CHAT_KEY, JSON.stringify({
+      html, chips: [...$('#chatChips').querySelectorAll('.chip')].map(c => c.textContent),
+      ctx: CHAT.ctx, last: CHAT.last, lastBet: CHAT.lastBet, list: CHAT.list, lists: CHAT.lists, nextList: CHAT.nextList,
+    }));
+  } catch (e) { /* storage full or off: the chat still works, it just isn't kept */ }
+}
+function restoreChat() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(CHAT_KEY) || 'null'); } catch (e) { saved = null; }
+  if (!saved || !saved.html) return;
+  $('#chatLog').innerHTML = saved.html;
+  setChips(saved.chips || CHIPS_START);
+  Object.assign(CHAT, { ctx: saved.ctx || null, last: saved.last || null, lastBet: saved.lastBet || null,
+    list: saved.list || null, lists: saved.lists || {}, nextList: saved.nextList || 1, started: true });
+}
+function newChat() {
+  localStorage.removeItem(CHAT_KEY);
+  $('#chatLog').innerHTML = '';
+  Object.assign(CHAT, { last: null, lastBet: null, ctx: null, list: null, lists: {}, nextList: 1, lastAsk: null, unknowns: 0, started: false });
+  openChat($('#chatPanel').classList.contains('full'));
 }
 function setChips(list) {
   $('#chatChips').innerHTML = list.map(c => `<button type="button" class="chip">${esc(c)}</button>`).join('');
@@ -401,29 +436,33 @@ function inWindow(r, window) {
   return true;
 }
 
-function pickItem(r, i, mode) {
+function pickItem(r, i, mode, listId) {
   const poor = mode === 'likely' && r.ev < 0 ? ` <span class="poorprice">⚠ Poor price</span>` : '';
-  return `<button type="button" class="cpick" data-i="${i}"><b>${esc(betLabel(r))}</b> ${esc(r.american)}${poor}
+  return `<button type="button" class="cpick" data-l="${listId}" data-i="${i}"><b>${esc(betLabel(r))}</b> ${esc(r.american)}${poor}
     <span class="muted small">${esc(r.event)}, ${when(r.start)} · ${pct(chance(r), 0)} chance · <span class="${r.ev > 0 ? 'up' : 'down'}">${signed(r.ev)}</span> value · ${confidence(r).label}</span></button>`;
 }
 
 // Show part of a list, remembering the rest for "show more".
+function keepList(rows) {
+  const id = CHAT.nextList++;
+  CHAT.lists[id] = rows;
+  return id;
+}
 function showList(head, rows, mode, foot, chips) {
   CHAT.list = { rows, mode, offset: 5 };
-  CHAT.picks = rows.slice(0, 5);
+  const page = rows.slice(0, 5), id = keepList(page);
   const more = rows.length > 5 ? `<br><span class="muted small">${rows.length - 5} more: say <i>show more</i>.</span>` : '';
-  botSay(`${head}<div class="cpicks">${CHAT.picks.map((r, i) => pickItem(r, i, mode)).join('')}</div>${foot || ''}${more}`,
+  botSay(`${head}<div class="cpicks">${page.map((r, i) => pickItem(r, i, mode, id)).join('')}</div>${foot || ''}${more}`,
     chips || (rows.length > 5 ? ['Show more', 'Safest bets tonight', 'Check a bet'] : ['Safest bets tonight', 'Check a bet']));
 }
 
 function moreAnswer() {
   const L = CHAT.list;
   if (!L || L.offset >= L.rows.length) return botSay('That\'s everything in the last list. Ask for another league, or <i>safest bets tonight</i>.', CHIPS_START);
-  const page = L.rows.slice(L.offset, L.offset + 5);
-  CHAT.picks = page;
+  const page = L.rows.slice(L.offset, L.offset + 5), id = keepList(page);
   L.offset += 5;
   const left = L.rows.length - L.offset;
-  botSay(`<div class="cpicks">${page.map((r, i) => pickItem(r, i, L.mode)).join('')}</div>${left > 0 ? `<span class="muted small">${left} more: say <i>show more</i>.</span>` : '<span class="muted small">That\'s all of them.</span>'}`,
+  botSay(`<div class="cpicks">${page.map((r, i) => pickItem(r, i, L.mode, id)).join('')}</div>${left > 0 ? `<span class="muted small">${left} more: say <i>show more</i>.</span>` : '<span class="muted small">That\'s all of them.</span>'}`,
     left > 0 ? ['Show more', 'Check a bet'] : ['Safest bets tonight', 'Check a bet']);
 }
 
@@ -564,7 +603,9 @@ async function botAnswer() {
 }
 
 // ---- events
+restoreChat();
 $('#chatFab').onclick = () => openChat(false);
+$('#chatNew').onclick = newChat;
 $('#chatClose').onclick = closeChat;
 $('#chatFull').onclick = () => $('#chatPanel').classList.toggle('full');
 $('#chatForm').addEventListener('submit', e => { e.preventDefault(); chatSend($('#chatInput').value); });
@@ -577,7 +618,8 @@ $('#chatChips').addEventListener('click', e => {
 });
 $('#chatLog').addEventListener('click', e => {
   const b = e.target.closest('.cpick');
-  if (b && CHAT.picks) openBet(CHAT.picks[+b.dataset.i]);
+  const rows = b && CHAT.lists[b.dataset.l];
+  if (rows && rows[+b.dataset.i]) openBet(rows[+b.dataset.i]);
 });
 document.querySelector('.side-item[data-chat]').onclick = () => { closeMenu(); openChat(window.innerWidth > 700); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#chatPanel').hidden && !$('#betModal').open) closeChat(); });

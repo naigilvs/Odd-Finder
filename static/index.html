@@ -79,6 +79,7 @@
         <div class="scan-col">
           <button class="btn-scan" id="scan">Scan odds</button>
           <div class="credit-line" id="credits"></div>
+          <div class="auto-line" id="autoLine" hidden></div>
         </div>
       </div>
     </div>
@@ -296,6 +297,7 @@
 <button class="chat-fab" id="chatFab" aria-label="Open chat">💬 Ask</button>
 <aside class="chat" id="chatPanel" aria-label="Chat" hidden>
   <header><b>Chat</b><span class="muted small">Answers from the bot's own numbers</span>
+    <button type="button" id="chatNew" class="linkbtn" aria-label="New chat" title="New chat">✎</button>
     <button type="button" id="chatFull" class="linkbtn" aria-label="Full screen" title="Full screen">⤢</button>
     <button type="button" id="chatClose" class="linkbtn" aria-label="Close chat">×</button></header>
   <div class="chat-log" id="chatLog" role="log" aria-live="polite"></div>

@@ -397,6 +397,32 @@ def _clv_block(bets, name):
             "lo": r[0] if r else None, "hi": r[1] if r else None}
 
 
+# The page's numbers for a bet (static/calc.js: chance, confidence, agrees), so bets the
+# bot scans on its own are logged exactly as if the page had scanned them.
+MARKET_WEIGHT = 0.75
+
+
+def page_numbers(r, s=None, inj=None):
+    """chance, confidence label, agree and stats_prob for a scanned row, given its stats
+    opinion `s` ({prob} or {reason} or None) and injury news `inj` ({player} or {})."""
+    has = bool(s and s.get("prob") is not None)
+    chance = MARKET_WEIGHT * r["fair_prob"] + (1 - MARKET_WEIGHT) * s["prob"] if has else r["fair_prob"]
+    score, n = 0, len(r.get("books_used") or [])
+    score += 2 if n >= 7 else 1 if n >= 4 else 0
+    score += 1 if r.get("sharp") else 0
+    if has:
+        same = (s["prob"] > r["book_prob"]) == (r["fair_prob"] > r["book_prob"])
+        score += 1 if same and abs(s["prob"] - r["fair_prob"]) <= 0.1 else -1
+    score -= 1 if r.get("player") else 0
+    score -= 2 if r.get("estimated") else 0
+    pl = (inj or {}).get("player")
+    if pl:
+        score -= 10 if pl["level"] == "out" else 3 if pl["level"] == "doubtful" else 2
+    level = "High" if score >= 3 else "Medium" if score >= 1 else "Low"
+    return {"chance": chance, "confidence": level, "stats_prob": s["prob"] if has else None,
+            "agree": bool(has and r["ev"] > 0 and s["prob"] > r["book_prob"])}
+
+
 CHANCE_BUCKETS = [(0, 0.3), (0.3, 0.4), (0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 1.01)]
 
 
