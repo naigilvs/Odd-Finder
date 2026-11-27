@@ -205,3 +205,12 @@ test('one side per bet: best value or most likely to win', () => {
   assert.equal(value.find(r => r.player).agree_sides, false);
   assert.equal(Calc.betGroup(rows[0]), Calc.betGroup(rows[4]));
 });
+
+test('free odds points estimate', () => {
+  assert.equal(Calc.freePoints(['basketball_nba'], {}), 30 * 20);
+  assert.equal(Calc.freePoints(['basketball_nba'], { basketball_nba: 12 }), 30 * 20);   // the usual slate is the floor
+  assert.equal(Calc.freePoints(['basketball_nba'], { basketball_nba: 45 }), 45 * 20);   // a busier slate counts
+  assert.ok(Calc.freePoints(['basketball_ncaab'], {}) >= 6000);                         // college costs the most
+  assert.equal(Calc.freePoints(['soccer_epl'], {}), 10 * 20);
+  assert.equal(Calc.freePoints([], {}), 0);
+});

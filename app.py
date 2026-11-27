@@ -773,7 +773,7 @@ def autoscan_status():
     if cfg["enabled"] and cfg["last_at"]:
         nxt = (datetime.fromisoformat(cfg["last_at"]) + timedelta(hours=cfg["every_hours"])).isoformat()
     return dict(cfg, next_at=nxt, available=bool(RUNDOWN_KEY) and not DEMO, hours=list(AUTOSCAN_HOURS),
-                quiet=[QUIET_HOURS.start, QUIET_HOURS.stop])
+                quiet=[QUIET_HOURS.start, QUIET_HOURS.stop], rundown_usage=rundown.usage)
 
 
 def closing_scan_once(now=None):

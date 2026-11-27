@@ -76,6 +76,22 @@
     });
   }
 
+  // ---- free odds points (TheRundown): about 20 per game loaded (3 sportsbooks x a few prices,
+  // plus the game itself). Leagues load several days ahead, so busy leagues cost the most.
+  const POINTS_PER_GAME = 20;
+  const USUAL_GAMES = {            // games in the days a free scan loads (3 days; football a week; soccer 5 days)
+    basketball_nba: 30, icehockey_nhl: 35, americanfootball_nfl: 16, baseball_mlb: 45, basketball_wnba: 15,
+    basketball_ncaab: 300, americanfootball_ncaaf: 60, mma_mixed_martial_arts: 15,
+  };
+  // `seen`: games found per league in its last scan. Scans keep only games FanDuel has lines
+  // for, but every game loaded costs points, so the usual slate is the floor.
+  function freePoints(sports, seen) {
+    return sports.reduce((total, k) => {
+      const usual = USUAL_GAMES[k] || (k.startsWith('soccer_') ? 10 : 20);
+      return total + Math.max(usual, (seen && seen[k]) || 0) * POINTS_PER_GAME;
+    }, 0);
+  }
+
   // ---- one side per bet
   // Every side and line of one bet share a key: LeBron Over and Under 24.5 (and 26.5),
   // Knicks -4.5 and Celtics +4.5, all three outcomes of a soccer moneyline.
@@ -259,7 +275,7 @@
 
   const api = { MARKET_WEIGHT, chance, agrees, confidence, CONF_RANK, betLabel, americanOdds, lineGroup, bestLines, betGroup, pickSides,
                 pickProfit, summarize, winFromOdds, parlayDecimal, parlayResult, wagerNet, wagerSummary,
-                balance, balanceHistory, kellyStake, bankrollWarnings };
+                balance, balanceHistory, kellyStake, bankrollWarnings, freePoints };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Calc = api;
 })(this);

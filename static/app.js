@@ -91,6 +91,7 @@ async function loadAutoscan(first) {
     renderAll();
   }
   if (s) AUTO.seen = s.last_at || AUTO.seen || '';
+  if (s && s.rundown_usage && s.rundown_usage.remaining != null) { showCredits(null, s.rundown_usage); renderScanButton(); }
   renderAutoLine();
   clearTimeout(AUTO.timer);
   AUTO.timer = setTimeout(() => loadAutoscan(false), 5 * 60 * 1000);      // check again in 5 minutes
@@ -198,12 +199,22 @@ function scanTargets() { return leaguesInTab().map(s => s.key).filter(k => state
 // Main lines from TheRundown's free plan (no credits) when it's set up and chosen.
 const freeSource = () => !!(state.cfg && state.cfg.rundown && $('#source').value === 'therundown');
 
+// Free odds points a scan would use, from how many games each league had in its last scan.
+function freeScanPoints(sports) {
+  const seen = {};
+  sports.forEach(k => { if (state.results[k]) seen[k] = new Set(state.results[k].rows.map(r => r.event_id)).size; });
+  return Calc.freePoints(sports.filter(k => (state.cfg.rundown_sports || []).includes(k)), seen);
+}
+const pointsLeft = () => state.rundownUsage && state.rundownUsage.remaining != null ? state.rundownUsage.remaining : null;
+const fmtPts = n => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
+
 function renderScanButton() {
   const n = scanTargets().length;
   const props = $('#props').checked;
   const notFree = freeSource() ? scanTargets().filter(k => !state.cfg.rundown_sports.includes(k)).length : 0;
+  const est = freeSource() ? freeScanPoints(scanTargets()) : 0, left = pointsLeft();
   const cost = state.cfg.demo ? ''
-    : freeSource() ? `<small>main lines free${props ? ', props use credits' : ''}${notFree ? `; ${notFree} not on the free plan` : ''}</small>`
+    : freeSource() ? `<small>about ${fmtPts(est)} free points${left != null ? ` of ${fmtPts(left)} left` : ''}${props ? ', props use credits' : ''}${notFree ? `; ${notFree} not on the free plan` : ''}</small>`
     : `<small>about ${n * CREDITS_PER_LEAGUE}${props ? '+' : ''} credits</small>`;
   $('#scan').innerHTML = n ? `Scan ${n} league${n > 1 ? 's' : ''}${cost}` : 'Pick a league';
   $('#scan').disabled = !n;
@@ -213,6 +224,15 @@ function renderScanButton() {
 async function scan() {
   const sports = scanTargets();
   if (!sports.length) return;
+  // a free scan that would use most (or more than all) of today's free points: say so first
+  const left = pointsLeft(), est = freeSource() && !state.cfg.demo ? freeScanPoints(sports) : 0;
+  if (est && left != null && est > left * 0.5) {
+    const college = sports.filter(k => /ncaa/.test(k)).length ? ' College leagues cost the most: untick them to save points.' : '';
+    const msg = est > left
+      ? `This scan needs about ${est.toLocaleString()} free odds points, but only ${left.toLocaleString()} are left today, so some leagues may not load.${college} Or set "Odds from" to The Odds API (uses credits). Scan anyway?`
+      : `This scan will use about ${est.toLocaleString()} of the ${left.toLocaleString()} free odds points left today.${college} Scan anyway?`;
+    if (!confirm(msg)) return;
+  }
   $('#scan').disabled = true;
   setStatus(freeSource() ? `Loading TheRundown's free odds (a few seconds per league)…`
     : `Checking ${state.book.name}'s odds against the market…`);
@@ -239,7 +259,7 @@ async function scan() {
 
 function setStatus(msg, err) { $('#status').textContent = msg; $('#status').className = 'status' + (err ? ' err' : ''); }
 function showCredits(q, rd) {
-  if (rd) state.rundownUsage = rd;
+  if (rd && rd.remaining != null) state.rundownUsage = rd;       // an unknown count doesn't erase a known one
   rd = state.rundownUsage;
   document.querySelectorAll('.credit-line').forEach(el => {
     if (state.cfg && state.cfg.demo) {
