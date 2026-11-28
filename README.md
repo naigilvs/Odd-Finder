@@ -22,6 +22,8 @@ Bet types: moneyline, point spread, totals (over/under) and, if you turn them on
 
 4. Open http://localhost:8765, choose your sportsbook, pick a sport tab and press **Scan**.
 
+**Desktop app:** run `./make_desktop_app.sh` once to put **Odd Finder** on your Desktop. Double-click it to start the bot (in a Terminal window: close that window to stop it) and open the site; if the bot is already running, it asks **Open** or **Stop the bot**. `start_bot.command` in this folder does the same start by double-click. Run the script again if you move this folder (drag the old app to the Trash first).
+
 To try it without a key, run `python3 app.py --demo`. It uses made-up teams and odds.
 
 ## API credit costs
