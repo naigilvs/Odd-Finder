@@ -1744,21 +1744,20 @@ function startEdit(w) {
   renderWagers();
 }
 
-// ---- bankroll: balance, units, suggested-stake settings, limits and a balance chart
+// ---- bankroll: balance, profit, suggested-stake settings, limits and a balance chart
 const bankrollSet = () => !!(WAGERS.bankroll && WAGERS.bankroll.start > 0);
-const unitSize = b => b.start * b.unit_pct / 100;
 
 function renderBankroll() {
   const b = WAGERS.bankroll, box = $('#bankroll');
   if (!b) { box.innerHTML = ''; return; }
   if (WAGERS.settingsOpen) { box.innerHTML = bankrollForm(b); return; }
   if (!bankrollSet()) {
-    box.innerHTML = `<div class="br-setup"><div><b>Set up your bankroll</b><span>Enter the money you've set aside for betting to see your balance, profit in units,
+    box.innerHTML = `<div class="br-setup"><div><b>Set up your bankroll</b><span>Enter the money you've set aside for betting to see your balance, profit,
       a suggested stake on every pick, and warnings when a wager goes past your limits.</span></div>
       <button class="btn-scan" type="button" data-br="open">Set up bankroll</button></div>`;
     return;
   }
-  const moved = Calc.moved(b), bal = Calc.balance(b, WAGERS.list), unit = unitSize(b), net = bal - b.start - moved;   // profit excludes deposits
+  const moved = Calc.moved(b), bal = Calc.balance(b, WAGERS.list), net = bal - b.start - moved;   // profit excludes deposits
   const tone = net > 0 ? 'up' : net < 0 ? 'down' : '';
   const limits = [b.max_stake > 0 && `max stake ${dollars(b.max_stake)}`, b.daily_loss > 0 && `daily loss limit ${dollars(b.daily_loss)}`,
     b.exposure_pct > 0 && `pending bets up to ${b.exposure_pct}% of bankroll`].filter(Boolean);
@@ -1766,7 +1765,7 @@ function renderBankroll() {
     <div class="br-top">
       <div class="br-nums">
         <div><b>${dollars(bal)}</b>balance (started at ${dollars(b.start)}${moved ? `, ${moved > 0 ? '+' : '−'}${dollars(Math.abs(moved))} ${moved > 0 ? 'added' : 'withdrawn'} since` : ''})</div>
-        <div><b class="${tone}">${net >= 0 ? '+' : '−'}${Math.abs(net / unit).toFixed(1)}u</b>profit in units (1 unit = ${dollars(Math.round(unit * 100) / 100)}, ${b.unit_pct}% of your start)</div>
+        <div><b class="${tone}">${signedDollars(Math.round(net * 100) / 100)}</b>${net >= 0 ? 'profit' : 'loss'} from your wagers (not counting money added or withdrawn)</div>
       </div>
       <div class="br-actions">
         <button class="linkbtn" type="button" data-money="deposit">+ Add money</button>
@@ -1812,7 +1811,6 @@ function bankrollForm(b) {
     <h3>Bankroll settings</h3>
     <div class="br-grid">
       ${num('start', 'Starting bankroll', '1', 'Money set aside for betting, before the wagers logged here.', '$')}
-      ${num('unit_pct', 'Unit size', '0.1', 'One unit as a share of your start. 1% is common.', '', '%')}
       <label>Suggested stakes
         <span class="br-in"><select data-key="kelly">${Object.entries(KELLY_WORD).map(([v, w]) =>
           `<option value="${v}"${+v === b.kelly ? ' selected' : ''}>${w[0].toUpperCase() + w.slice(1)}${v === '0.25' ? ' (recommended)' : v === '1' ? ' (aggressive)' : ''}</option>`).join('')}</select></span>
@@ -1962,7 +1960,6 @@ function renderWagers() {
   const name = w => esc(w.note || 'Wager');
   $('#wSummary').innerHTML = list.length ? [
     s.count && card(signedDollars(s.net), tone(s.net), s.net >= 0 ? 'net profit' : 'net loss'),
-    s.count && bankrollSet() && card(`${s.net >= 0 ? '+' : '−'}${Math.abs(s.net / unitSize(WAGERS.bankroll)).toFixed(1)}u`, tone(s.net), 'net in units'),
     s.count && card(signedDollars(s.totalWon), s.totalWon ? 'up' : '', `total won on ${s.won} winning bet${s.won === 1 ? '' : 's'}`),
     s.count && card(s.totalLost ? signedDollars(-s.totalLost) : '$0', s.totalLost ? 'down' : '', `total lost on ${s.lost} losing bet${s.lost === 1 ? '' : 's'}`),
     s.count && card(s.winRate != null ? pct(s.winRate, 0) : '–', '', `win rate (${s.won}-${s.lost}${s.push ? `-${s.push}` : ''} won-lost${s.push ? '-push' : ''})`),

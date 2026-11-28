@@ -214,7 +214,7 @@ function aiFacts(question) {
     const parts = [`Bet being discussed: ${betLabel(r)}${r.decimal ? ` at ${r.american}` : ''} (${r.event}, starts ${r.start}).`];
     try {
       parts.push(`Chance of success ${pct(chance(r), 0)}${r.ev != null ? `, value ${signed(r.ev)}` : ''}, ${r.stats_only ? 'stats only, no market price' : `${confidence(r).label} confidence`}.`);
-      if (r.decimal) parts.push(`Verdict: ${yesNo(r, ...verdictOf(r)).slice(1).join(': ')}.`);
+      parts.push(`Verdict (by chance of success): ${yesNo(r).slice(1).join(': ')}.`);
     } catch (e) { /* partial facts are fine */ }
     const inj = (INJ.known[statKey(r)] || {}).player;
     if (inj) parts.push(`${inj.name} is listed ${inj.status} on the injury report.`);
@@ -509,27 +509,17 @@ function chatRow(bet) {
   return { row, based };
 }
 
-// A plain answer first: Yes / Lean yes / Not really / No, from the verdict and any injury.
-function yesNo(row, tone, title) {
+// A plain answer first: Yes / Lean yes / Not really / No, from the chance of success (and any injury).
+// The price (value) is a side note, not the answer.
+function yesNo(row) {
   const inj = (INJ.known[statKey(row)] || {}).player;
   if (inj && inj.level === 'out') return ['bad', 'No', `${inj.name} is listed out`];
-  if (!row.decimal) return ['ok', 'Can\'t say yet', 'I need the odds'];
-  if (title === 'Strong value') return ['good', 'Yes', 'good value at this price'];
-  if (title === 'Value pick') return ['good', 'Yes, a small edge', 'slightly good value'];
-  if (/Possible value|Slight value/.test(title)) return ['ok', 'Lean yes', 'some value, but a rough estimate'];
-  if (title === 'About a fair price') return ['ok', 'Not really', 'no edge at this price'];
-  return ['bad', 'No', 'the price pays less than the bet is worth'];
-}
-
-function verdictOf(row) {
-  if (!row.decimal) return ['ok', 'Need the odds', 'Tell me the odds (e.g. −115) and I\'ll say whether the price is worth it.'];
-  if (row.stats_only) {                    // no market price: the stats' opinion alone, so softer words
-    return row.ev > 0.03 ? ['ok', 'Possible value, stats only', 'The stats think this price pays more than the bet is worth, but there\'s no market price to confirm it.']
-      : row.ev > 0 ? ['ok', 'Slight value by the stats', 'A small edge by the stats alone: rough, so treat it as a lean.']
-      : row.ev > -0.02 ? ['ok', 'About a fair price', 'By the stats, this price is close to what the bet is worth.']
-      : ['bad', 'Not worth it at this price', 'By the stats, this price pays less than the bet is worth.'];
-  }
-  return explain(row).verdict;
+  const c = chance(row), p = pct(c, 0);
+  const price = row.ev == null ? '' : row.ev > 0.03 ? ', and the price is good' : row.ev < -0.02 ? ', but the price is low for that chance' : '';
+  if (c >= 0.65) return ['good', 'Yes', `about a ${p} chance to hit${price}`];
+  if (c >= 0.55) return ['good', 'Lean yes', `about a ${p} chance: more likely to hit than not${price}`];
+  if (c >= 0.45) return ['ok', 'Not really', `about a ${p} chance: close to a coin flip${price}`];
+  return ['bad', 'No', `only about a ${p} chance to hit${price}`];
 }
 
 // Reasons for a stats-only check, without the market words the full check uses.
@@ -555,7 +545,7 @@ function checkAnswer(bet, stakeToo) {
   }
   CHAT.last = row;
   CHAT.lastBet = bet;
-  const ch = chance(row), [tone, title, line] = verdictOf(row);
+  const ch = chance(row);
   const c = row.stats_only ? { label: 'Low' } : confidence(row);
   const ex = row.stats_only ? statsOnlyReasons(row, bet) : row.decimal ? explain(row) : { good: [], risk: [] };
   const fair = americanOdds(1 / ch);
@@ -573,7 +563,7 @@ function checkAnswer(bet, stakeToo) {
   if (inj) extra.push(`<span class="inj ${inj.level}">⚠ ${esc(inj.name)}: ${esc(inj.status)}</span> ${esc(inj.comment || '')}`);
   else if (!bet.player && bet.injury_teams) extra.push(teamInjuries(bet));
   if (row.decimal) extra.push(stakeSuggestion(row).text);
-  const yn = yesNo(row, tone, title);
+  const yn = yesNo(row);
   const html = `
     <div class="cbet">
       <b>${esc(betLabel(row))}</b><span class="muted small">${esc(row.event)}, ${when(row.start)}</span>
